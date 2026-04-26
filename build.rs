@@ -1,7 +1,9 @@
 use std::{fs, path::PathBuf, vec};
 
 fn main() {
-    println!("cargo:rustc-link-lib=c++");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
+        println!("cargo:rustc-link-lib=static=c++_static");
+    }
 
     println!("cargo:rerun-if-changed=aidl");
     println!("cargo:rerun-if-changed=src/proto");
@@ -74,5 +76,29 @@ fn main() {
 
     println!("Patched AIDL content:\n{}", generated_path.display());
 
-    fs::write(generated_path, patched_content).unwrap();
+    fs::write(&generated_path, &patched_content).unwrap();
+
+    // Verify patches were applied. If any assertion fails, rsbinder-aidl codegen has changed
+    // and the string replacements above need to be updated.
+    let verify = fs::read_to_string(&generated_path).unwrap();
+    assert!(
+        verify.contains("super::super::super::hardware::security::keymint::SecurityLevel::SecurityLevel"),
+        "BUG: SecurityLevel enum path patch was NOT applied. rsbinder-aidl codegen may have changed."
+    );
+    assert!(
+        verify.contains("super::super::super::hardware::security::keymint::HardwareAuthenticatorType::HardwareAuthenticatorType"),
+        "BUG: HardwareAuthenticatorType enum path patch was NOT applied."
+    );
+    assert!(
+        !verify.contains("r#authenticatorType: super::Digest::Digest::NONE,"),
+        "BUG: Digest::NONE still present -- authenticatorType patch was not applied."
+    );
+    assert!(
+        !verify.contains("r#authenticatorType: super::KeyPermission::KeyPermission::NONE,"),
+        "BUG: KeyPermission::NONE still present -- patch not applied."
+    );
+    assert!(
+        !verify.contains("r#authenticatorType: super::PaddingMode::PaddingMode::NONE,"),
+        "BUG: PaddingMode::NONE still present -- patch not applied."
+    );
 }
