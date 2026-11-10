@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { MiuixCheckboxPreference, MiuixIcon } from 'miuix-vue'
 import { All, More } from 'miuix-vue/icons'
+import { HAS_SOTER } from '../r1'
 
 const props = defineProps<{
   packageName: string
@@ -47,7 +48,7 @@ watch(() => props.packageName, () => { iconLoaded.value = false })
         </span>
       </template>
     </MiuixCheckboxPreference>
-    <button type="button" class="target-app-settings" :disabled="disabled"
+    <button v-if="HAS_SOTER" type="button" class="target-app-settings" :disabled="disabled"
       :aria-label="'SOTER: ' + appName" @click="emit('settings')">
       <MiuixIcon :icon="More" :size="22" />
     </button>

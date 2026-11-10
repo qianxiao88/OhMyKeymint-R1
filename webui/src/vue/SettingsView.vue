@@ -32,6 +32,7 @@ import {
 } from '../appearance'
 import { i18n } from '../i18n'
 import { afterPaint } from '../app_list/app_list'
+import { R1_AUTHOR, R1_MODULE_NAME } from '../r1'
 
 interface Choice<T extends string> {
   value: T
@@ -432,6 +433,10 @@ onBeforeUnmount(() => {
             </template>
           </MiuixArrowPreference>
         </MiuixCard>
+      </section>
+      <section class="settings-section" aria-labelledby="r1-about-title">
+        <MiuixSmallTitle id="r1-about-title" text="关于" />
+        <p class="r1-about">{{ R1_MODULE_NAME }}<br>作者：{{ R1_AUTHOR }}</p>
       </section>
     </div>
 

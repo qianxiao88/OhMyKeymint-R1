@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import {
   MiuixDialog,
   MiuixRadioButtonPreference,
@@ -27,13 +27,22 @@ import { i18n } from '../i18n'
 import { fetchLatestSecurityPatch } from '../security_patch'
 import { isDev } from '../utils/dev'
 import HomeView, { type KeyboxStatus, type ModuleStatus, type TeeStatus } from './HomeView.vue'
-import PifFingerprintDialog from './PifFingerprintDialog.vue'
-import SettingsView from './SettingsView.vue'
-import SoterIdentityDialog from './SoterIdentityDialog.vue'
+import type PifDialogType from './PifFingerprintDialog.vue'
+import type SettingsViewType from './SettingsView.vue'
+import type SoterDialogType from './SoterIdentityDialog.vue'
 import TargetsView from './TargetsView.vue'
 import ToolsView, { type ToolEvent } from './ToolsView.vue'
 import FileBrowserSheet from './FileBrowserSheet.vue'
+import WallpaperDialog from './WallpaperDialog.vue'
+import { HAS_SOTER, IS_LITE, toolAvailable } from '../r1'
+// Theme initialization also runs in lite, where SettingsView is excluded.
+import '../appearance'
 import './app.scss'
+import './r1.scss'
+
+const PifFingerprintDialog = IS_LITE ? undefined : defineAsyncComponent(() => import('./PifFingerprintDialog.vue'))
+const SettingsView = IS_LITE ? undefined : defineAsyncComponent(() => import('./SettingsView.vue'))
+const SoterIdentityDialog = HAS_SOTER ? defineAsyncComponent(() => import('./SoterIdentityDialog.vue')) : undefined
 
 const cli = new Cli()
 const config = new ConfigOhMyKeyMint(cli)
@@ -83,14 +92,16 @@ const rkpIssuedArtifacts = ref<RkpIssuedArtifact[]>([])
 const pendingRkpImport = ref<RkpIssuedArtifact | null>(null)
 const pifOpen = ref(false)
 const soterLocalOpen = ref(false)
-const soterLocalDialog = ref<InstanceType<typeof SoterIdentityDialog> | null>(null)
+const soterLocalDialog = ref<InstanceType<typeof SoterDialogType> | null>(null)
 const keyboxOpen = ref(false)
 const selectedKeybox = ref<{ name: string, contents: Uint8Array } | null>(null)
 const keyboxBusy = ref(false)
+const cloudBusy = ref(false)
+const wallpaperOpen = ref(false)
 const targetsView = ref<InstanceType<typeof TargetsView> | null>(null)
-const settingsView = ref<InstanceType<typeof SettingsView> | null>(null)
+const settingsView = ref<InstanceType<typeof SettingsViewType> | null>(null)
 const toolsView = ref<InstanceType<typeof ToolsView> | null>(null)
-const pifDialog = ref<InstanceType<typeof PifFingerprintDialog> | null>(null)
+const pifDialog = ref<InstanceType<typeof PifDialogType> | null>(null)
 
 const pageIds = ['home', 'tools', 'settings'] as const
 const navItems = computed(() => [
@@ -235,6 +246,7 @@ function notify(message: string, error = false): void {
 }
 
 function setPage(index: number): void {
+  if (IS_LITE) return
   if (index < 0 || index >= pageIds.length || index === pageIndex.value) return
   pageIndex.value = index
   if (index !== 0 && !pageHistoryActive) {
@@ -348,9 +360,9 @@ async function reloadApps(): Promise<void> {
     await config.refresh()
     await appList.fetch()
     snapshot.value = appList.getSnapshot()
-    moduleStatus.value = config.isWritable ? 'ready' : 'error'
+    if (!IS_LITE) moduleStatus.value = config.isWritable ? 'ready' : 'error'
   } catch (error) {
-    moduleStatus.value = 'error'
+    if (!IS_LITE) moduleStatus.value = 'error'
     console.error('Unable to load OMK configuration:', error)
     notify(i18n.t('prompt_load_error'), true)
   } finally {
@@ -409,14 +421,14 @@ async function refreshIdentity(force = false): Promise<void> {
       cli.getKeyboxState(),
       cli.getSystemSecurityPatch(),
       cli.getTeeStatus(),
-      cli.getPifFingerprintState(),
+      IS_LITE ? Promise.resolve({ enabled: false } as const) : cli.getPifFingerprintState(),
     ])
     if (keybox.status === 'fulfilled') {
       const value = keybox.value
       keyboxStatus.value = value.valid ? (value.bundled ? 'bundled' : 'custom') : 'invalid'
       keyboxSource.value = value.source
       keyboxLevel.value = value.level
-      keyboxRevocation.value = value.valid ? 'checking' : value.revocation
+      keyboxRevocation.value = value.valid && !IS_LITE ? 'checking' : value.revocation
     } else keyboxStatus.value = 'error'
     if (patch.status === 'fulfilled') securityPatch.value = patch.value
     if (tee.status === 'fulfilled') teeStatus.value = 'normal'
@@ -427,7 +439,7 @@ async function refreshIdentity(force = false): Promise<void> {
         : null
     }
     // Network revocation checks must not delay the other local status fields.
-    if (keybox.status === 'fulfilled' && keybox.value.valid) {
+    if (!IS_LITE && keybox.status === 'fulfilled' && keybox.value.valid) {
       try { keyboxRevocation.value = await cli.checkKeyboxRevocation() }
       catch { keyboxRevocation.value = 'unknown' }
     }
@@ -439,6 +451,7 @@ async function refreshIdentity(force = false): Promise<void> {
 async function refreshDiagnostics(): Promise<void> {
   diagnosticsStatus.value = 'loading'
   if (isDev()) {
+    moduleStatus.value = 'ready'
     diagnostics.value = {
       keymint: { status: 'running', pid: 1234 },
       keystore2: { status: 'running', pid: 1240 },
@@ -454,6 +467,18 @@ async function refreshDiagnostics(): Promise<void> {
   }
 
   await afterPaint()
+  if (IS_LITE) {
+    try {
+      const state = await cli.getR1Status()
+      moduleStatus.value = state.ok ? 'ready' : 'error'
+      liteReason.value = state.reason
+    } catch (error) {
+      moduleStatus.value = 'error'
+      liteReason.value = error instanceof Error ? error.message : String(error)
+    }
+    diagnosticsStatus.value = moduleStatus.value === 'ready' ? 'ready' : 'error'
+    return
+  }
   const [state] = await Promise.allSettled([
     cli.getDiagnostics(),
   ])
@@ -478,9 +503,33 @@ async function chooseKeybox(): Promise<void> {
   }
 }
 
+const liteReason = ref('')
+async function updateCloudKeybox(): Promise<void> {
+  if (cloudBusy.value || keyboxBusy.value || keyboxOpen.value) return
+  cloudBusy.value = true
+  try {
+    if (isDev()) { notify(i18n.t('maintenance_preview_only')); return }
+    await afterPaint()
+    await cli.cloudUpdate()
+    notify('云端 Keybox 导入成功')
+    await Promise.all([refreshIdentity(true), refreshDiagnostics()])
+  } catch (error) {
+    notify(error instanceof Error ? error.message : String(error), true)
+  } finally { cloudBusy.value = false }
+}
+
+async function openFeedback(): Promise<void> {
+  try {
+    if (isDev()) { notify(i18n.t('maintenance_preview_only')); return }
+    await cli.openFeedbackGroup()
+  } catch (error) {
+    notify(error instanceof Error ? error.message : String(error), true)
+  }
+}
+
 async function installKeybox(): Promise<void> {
   const selected = selectedKeybox.value
-  if (!selected || keyboxBusy.value) return
+  if (!selected || keyboxBusy.value || cloudBusy.value) return
   keyboxBusy.value = true
   try {
     await afterPaint()
@@ -645,7 +694,11 @@ function formatRkpCreatedAt(timestamp: number): string {
 }
 
 function onTool(event: ToolEvent): void {
+  if (!toolAvailable(event)) return
   switch (event) {
+    case 'cloudUpdate': void updateCloudKeybox(); break
+    case 'feedback': void openFeedback(); break
+    case 'wallpaper': wallpaperOpen.value = true; break
     case 'openAppTargets': openTargets(); break
     case 'installKeybox': void chooseKeybox(); break
     case 'syncSecurityPatch': void syncPatch(false); break
@@ -791,6 +844,12 @@ watch(keyboxOpen, open => {
     history.push('keybox', () => { if (!keyboxBusy.value) keyboxOpen.value = false })
   } else if (!open && overlayHistory.delete('keybox')) history.consume('keybox')
 })
+watch(wallpaperOpen, open => {
+  if (open && !overlayHistory.has('wallpaper')) {
+    overlayHistory.add('wallpaper')
+    history.push('wallpaper', () => { wallpaperOpen.value = false })
+  } else if (!open && overlayHistory.delete('wallpaper')) history.consume('wallpaper')
+})
 function trackRkpOverlay(): void {
   if (!rkpOpen.value || overlayHistory.has('rkp')) return
   overlayHistory.add('rkp')
@@ -830,7 +889,7 @@ watch(rkpImportConfirmOpen, open => {
 </script>
 
 <template>
-  <div class="omk-app">
+  <div class="omk-app" :class="{ 'r1-lite': IS_LITE }">
     <main v-show="!targetsOpen" class="page-host" :style="{ '--omk-page-direction': pageDirection }">
       <Transition name="page-switch">
         <HomeView
@@ -844,17 +903,23 @@ watch(rkpImportConfirmOpen, open => {
           :tee-status="teeStatus"
           :security-patch="securityPatch"
           :spoofed-device="spoofedDevice"
+          :module-status="moduleStatus"
+          :module-reason="liteReason"
           @refresh-diagnostics="refreshDiagnostics"
         />
       </Transition>
       <Transition name="page-switch">
         <ToolsView
-          v-show="pageIndex === 1"
+          v-show="IS_LITE || pageIndex === 1"
           :security-patch-busy="securityPatchBusy"
           :maintenance-busy="maintenanceBusy"
           ref="toolsView"
           :rkp-issuance-busy="rkpIssuanceBusy"
           :security-patch="securityPatch"
+          :cloud-busy="cloudBusy || keyboxBusy"
+          @cloud-update="onTool('cloudUpdate')"
+          @feedback="onTool('feedback')"
+          @wallpaper="onTool('wallpaper')"
           @overlay-open="onToolsOverlayOpen"
           @overlay-close="onToolsOverlayClose"
           @open-app-targets="onTool('openAppTargets')"
@@ -870,6 +935,7 @@ watch(rkpImportConfirmOpen, open => {
       </Transition>
       <Transition name="page-switch">
         <SettingsView
+          v-if="!IS_LITE"
           v-show="pageIndex === 2"
           ref="settingsView"
           @overlay-open="onSettingsOverlayOpen"
@@ -879,7 +945,7 @@ watch(rkpImportConfirmOpen, open => {
     </main>
 
     <Teleport to="body">
-      <div v-show="!targetsOpen" class="navigation-dock">
+      <div v-if="!IS_LITE" v-show="!targetsOpen" class="navigation-dock">
         <MiuixNavigationBar
           :model-value="pageIndex"
           :items="navItems"
@@ -937,6 +1003,7 @@ watch(rkpImportConfirmOpen, open => {
     </MiuixDialog>
 
     <PifFingerprintDialog
+      v-if="!IS_LITE"
       ref="pifDialog"
       v-model="pifOpen"
       :cli="cli"
@@ -963,6 +1030,7 @@ watch(rkpImportConfirmOpen, open => {
       </div>
     </MiuixDialog>
     <MiuixDialog
+      v-if="!IS_LITE"
       :model-value="rkpOpen"
       :title="i18n.t('tools_repair_rkp')"
       :close-on-click-modal="maintenanceBusy !== 'rkp'"
@@ -983,6 +1051,7 @@ watch(rkpImportConfirmOpen, open => {
       </div>
     </MiuixDialog>
     <MiuixDialog
+      v-if="!IS_LITE"
       :model-value="rkpIssueOpen"
       :title="i18n.t('tools_issue_rkp')"
       :close-on-click-modal="!rkpIssueBusy"
@@ -1041,6 +1110,7 @@ watch(rkpImportConfirmOpen, open => {
       </div>
     </MiuixDialog>
     <MiuixDialog
+      v-if="!IS_LITE"
       :model-value="rkpIssueConfirmOpen"
       :title="i18n.t('rkp_issue_confirm_title')"
       :close-on-click-modal="!rkpIssueBusy"
@@ -1065,6 +1135,7 @@ watch(rkpImportConfirmOpen, open => {
       </div>
     </MiuixDialog>
     <MiuixDialog
+      v-if="!IS_LITE"
       :model-value="rkpImportConfirmOpen"
       :title="i18n.t('rkp_import_confirm_title')"
       :close-on-click-modal="!rkpIssueBusy"
@@ -1087,6 +1158,7 @@ watch(rkpImportConfirmOpen, open => {
       </div>
     </MiuixDialog>
     <MiuixSnackbarHost />
-    <SoterIdentityDialog ref="soterLocalDialog" v-model="soterLocalOpen" :cli="cli" />
+    <SoterIdentityDialog v-if="HAS_SOTER" ref="soterLocalDialog" v-model="soterLocalOpen" :cli="cli" />
+    <WallpaperDialog v-model="wallpaperOpen" @notify="notify" />
   </div>
 </template>

@@ -1,0 +1,52 @@
+// A single fixed bitmap sits behind the existing MIUIX surfaces.
+html {
+  --r1-glass: rgb(255 255 255 / 78%);
+  --omk-top-bar-fill: var(--r1-glass);
+  --omk-bar-background: var(--r1-glass);
+  &.m-theme-dark { --r1-glass: rgb(25 25 25 / 82%); }
+  .m-card, .m-surface, .target-app-row, .m-top-app-bar, .m-navigation-bar {
+    background: var(--r1-glass) !important;
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+    border: 1px solid rgb(128 128 128 / 16%);
+  }
+  .status-hero, .identity-card, .diagnostics-card, .preference-card, .settings-card {
+    border-radius: 8px;
+  }
+}
+html::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-image: var(--r1-wallpaper, none);
+  background-size: cover;
+  background-position: center;
+  pointer-events: none;
+}
+html[data-r1-wallpaper='true'] {
+  background: var(--m-color-surface);
+  body, #app, .omk-app, .page-host, .settings-view, .targets-view { background: transparent; }
+  #app { position: relative; z-index: 1; }
+  .targets-top-bar { background: var(--r1-glass); }
+  --omk-top-bar-fill: var(--r1-glass);
+  --omk-bar-background: var(--r1-glass);
+  --omk-system-bar-background: transparent;
+  --r1-glass: rgb(255 255 255 / 78%);
+  &.m-theme-dark { --r1-glass: rgb(25 25 25 / 82%); }
+  .m-card, .m-surface, .target-app-row, .m-top-app-bar, .m-navigation-bar {
+    background: var(--r1-glass) !important;
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+    border-color: rgb(255 255 255 / 20%);
+  }
+  .status-hero, .identity-card, .diagnostics-card, .preference-card, .settings-card {
+    border-radius: 8px;
+  }
+}
+.r1-module-name { font-size: 24px; line-height: 1.3; overflow-wrap: anywhere; }
+.r1-about { padding: 0 16px; line-height: 1.7; overflow-wrap: anywhere; }
+.r1-lite { --omk-nav-clearance: var(--omk-bottom-inset); }
+.r1-lite .home-page { padding-bottom: 0; }
+.r1-lite .tools-page { padding-top: 0; }
+.r1-lite .status-hero__text span { overflow-wrap: anywhere; }

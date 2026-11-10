@@ -141,8 +141,8 @@ jobs:
             --output-dir changelog-branch
 
           cd changelog-branch
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "XiaoYu"
+          git config user.email "2378834248@qq.com"
 
           git add changelog.md update.json
           if git diff --cached --quiet; then

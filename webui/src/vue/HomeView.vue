@@ -15,12 +15,15 @@ import type {
   KeyboxSource,
 } from '../cli'
 import { i18n } from '../i18n'
+import { IS_LITE, R1_MODULE_NAME } from '../r1'
 
 export type ModuleStatus = 'loading' | 'ready' | 'error'
 export type KeyboxStatus = 'loading' | 'bundled' | 'custom' | 'invalid' | 'error'
 export type TeeStatus = 'loading' | 'normal' | 'error'
 
 const props = defineProps<{
+  moduleStatus: ModuleStatus
+  moduleReason: string
   keyboxStatus: KeyboxStatus
   keyboxSource: KeyboxSource
   keyboxLevel: KeyboxLevel
@@ -101,6 +104,14 @@ const teeState = computed(() => ({
 })[props.teeStatus])
 
 const heroState = computed(() => {
+  if (IS_LITE) {
+    return {
+      tone: props.moduleStatus === 'ready' ? 'active' : props.moduleStatus === 'loading' ? 'loading' : 'error',
+      label: props.moduleStatus === 'ready' ? tr('home_status_running', 'Running')
+        : props.moduleStatus === 'loading' ? tr('home_status_loading', 'Checking') : tr('home_status_error', 'Needs attention'),
+      detail: props.moduleReason,
+    }
+  }
   if (props.diagnosticsStatus === 'error') {
     return { tone: 'error', label: tr('home_status_error', 'Needs attention'), detail: '' }
   }
@@ -150,8 +161,8 @@ function diagnosticStatusLabel(status: string, hardware = false): string {
 
 <template>
   <section class="app-page home-page" aria-labelledby="home-title">
-    <MiuixTopAppBar title="Oh My Keymint" />
-    <h1 id="home-title" class="page-large-title">Oh My Keymint</h1>
+    <MiuixTopAppBar :title="R1_MODULE_NAME" />
+    <h1 id="home-title" class="page-large-title r1-module-name">{{ R1_MODULE_NAME }}</h1>
 
     <MiuixCard class="status-hero" :data-tone="heroState.tone" press-feedback="none">
       <div class="status-hero__body" role="status" aria-live="polite">
@@ -173,7 +184,7 @@ function diagnosticStatusLabel(status: string, hardware = false): string {
       </div>
     </MiuixCard>
 
-    <div class="identity-grid" aria-live="polite">
+    <div v-if="!IS_LITE" class="identity-grid" aria-live="polite">
       <MiuixCard class="identity-card" press-feedback="none">
         <div class="identity-field identity-field--primary">
           <span>{{ tr('home_keybox', 'Keybox') }}</span>
@@ -205,7 +216,7 @@ function diagnosticStatusLabel(status: string, hardware = false): string {
       </MiuixCard>
     </div>
 
-    <MiuixCard class="diagnostics-card" press-feedback="none">
+    <MiuixCard v-if="!IS_LITE" class="diagnostics-card" press-feedback="none">
       <header class="diagnostics-heading">
         <div>
           <h2>{{ tr('home_diagnostics_title', 'Current device status') }}</h2>

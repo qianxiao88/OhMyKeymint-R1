@@ -484,6 +484,39 @@ function parseSupportedAbi(output: string): SupportedAbi | null {
 }
 
 export class Cli {
+  async cloudUpdate(): Promise<void> {
+    const output = await this.#runR1('cloud-update')
+    if (output.ok !== true) throw new Error('Cloud keybox update did not complete')
+  }
+
+  async getR1Status(): Promise<{ ok: boolean, reason: string, cloud_connected: boolean }> {
+    const output = await this.#runR1('status')
+    if (typeof output.ok !== 'boolean' || typeof output.reason !== 'string'
+        || typeof output.cloud_connected !== 'boolean') throw new Error('Invalid R1 status response')
+    return output as { ok: boolean, reason: string, cloud_connected: boolean }
+  }
+
+  async #runR1(action: 'cloud-update' | 'status'): Promise<Record<string, unknown>> {
+    const result = await exec(`${shellQuote('/data/adb/modules/oh_my_keymint/arm64-v8a/r1-helper')} ${shellQuote(action)}`)
+    if (result.errno !== 0) {
+      throw new Error(result.stderr.trim() || `R1 helper exited with code ${result.errno}`)
+    }
+    if (result.stdout.length > 8192) throw new Error('R1 response is too large')
+    let output: unknown
+    try { output = JSON.parse(result.stdout) }
+    catch { throw new Error('Invalid R1 helper response') }
+    if (!isRecord(output)) throw new Error('Invalid R1 helper response')
+    return output
+  }
+
+  async openFeedbackGroup(): Promise<void> {
+    const uri = 'mqqapi://card/show_pslcard?src_type=internal&version=1&uin=608960009&card_type=group&source=qrcode'
+    const result = await exec(`/system/bin/am start --user current -a android.intent.action.VIEW -d ${shellQuote(uri)}`)
+    if (result.errno !== 0 || /Error:|Exception|unable to resolve Intent/i.test(`${result.stdout}\n${result.stderr}`)) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || 'Unable to open QQ group 608960009')
+    }
+  }
+
   async getSoterLocal(): Promise<SoterIdentityState> {
     const { keymint } = await this.#getHelperPaths()
     return this.#parseSoterLocal(await this.#run(keymint, ['--webui-get-soter-local'], 256 * 1024))

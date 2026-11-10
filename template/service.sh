@@ -34,6 +34,23 @@ start_daemon() {
   return 0
 }
 
+# BEGIN R1 BOOT HOOK
+if [ -f "$MODDIR/r1-build.json" ]; then
+  R1_HELPER="$MODDIR/arm64-v8a/r1-helper"
+  [ -x "$R1_HELPER" ] || { echo "[R1] missing executable helper" >&2; exit 1; }
+  if [ -f "$MODDIR/r1-no-soter" ]; then
+    # Native API changes only enabled, preserving identities and application settings.
+    LD_LIBRARY_PATH="/system/lib64:/apex/com.android.runtime/lib64:/apex/com.android.runtime/lib64/bionic:/vendor/lib64:$LD_LIBRARY_PATH" \
+      "$MODDIR/libs/arm64-v8a/keymint" --webui-set-soter-local-base64 \
+      eyJhY3Rpb24iOiJlbmFibGVkIiwiZW5hYmxlZCI6ZmFsc2V9 >/dev/null || {
+      echo "[R1] Soter disable failed; daemon startup stopped" >&2
+      exit 1
+    }
+  fi
+  "$R1_HELPER" monitor &
+fi
+# END R1 BOOT HOOK
+
 start_daemon "$MODDIR/daemon" "$STATE_DIR/keymint-daemon.pid"
 start_daemon "$MODDIR/daemon-injector" "$STATE_DIR/injector-daemon.pid"
 # Resolve the active root implementation's resetprop binary.
