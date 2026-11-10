@@ -144,6 +144,17 @@ these files to Git from Python, use byte input (for example, `read_bytes()`)
 or explicitly set `encoding="utf-8"`; host-locale subprocess text encoding
 must not determine the bytes stored in Git.
 
+For a stable R1 release, the same workflow writes `update-lite.json`,
+`update-no-soter.json`, `update-full.json` and `changelog.md` to `master`.
+It requires all three uploaded `OhMyKeymint-R1-<version>-<variant>-<hash>.zip`
+assets and reads each root `module.prop` as UTF-8 without extracting the ZIP.
+Module identity, version, variant update URL and GitHub download URL must match;
+each update uses the packaged positive `versionCode`. Drafts and prereleases
+are skipped. An older release preserves published higher-version metadata.
+Increase packaged `versionCode` for each upgrade. Validate downloaded assets locally with
+`scripts/update_release_metadata.py --r1 --release-json <GitHub-release.json>
+--asset-dir <downloaded-assets> --output-dir <metadata-checkout>`.
+
 Rust changes must pass:
 
 ```sh

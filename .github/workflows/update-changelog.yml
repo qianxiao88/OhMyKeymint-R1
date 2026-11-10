@@ -4,8 +4,13 @@ on:
   release:
     types: ["published", "edited"]
 
+concurrency:
+  group: release-update-metadata
+  cancel-in-progress: false
+
 jobs:
   update-changelog:
+    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -42,8 +47,9 @@ jobs:
             asset_count=$(jq '.assets | length' "$RELEASE_JSON")
             uploaded_count=$(jq '[.assets[] | select(.state == "uploaded")] | length' "$RELEASE_JSON")
             current_names=$(jq -r '[.assets[].name] | sort | join("\n")' "$RELEASE_JSON")
+            r1_count=$(jq '[.assets[] | select((.name | startswith("OhMyKeymint-R1-")) and (.name | endswith(".zip")))] | length' "$RELEASE_JSON")
 
-            if [ "$asset_count" -gt 0 ] && [ "$asset_count" -eq "$uploaded_count" ] && [ "$current_names" = "$previous_names" ]; then
+            if [ "$asset_count" -gt 0 ] && [ "$asset_count" -eq "$uploaded_count" ] && [ "$current_names" = "$previous_names" ] && { [ "$r1_count" -eq 0 ] || [ "$r1_count" -eq 3 ]; }; then
               stable_count=$((stable_count + 1))
             else
               stable_count=0
@@ -67,15 +73,25 @@ jobs:
           fi
 
           tag_name=$(jq -r '.tag_name' "$RELEASE_JSON")
-          release_zip_url=$(jq -r '.assets[] | select((.name | contains("release")) and (.name | endswith(".zip"))) | .browser_download_url' "$RELEASE_JSON" | head -n1)
-          if [ -z "$release_zip_url" ]; then
+          r1_count=$(jq '[.assets[] | select((.name | startswith("OhMyKeymint-R1-")) and (.name | endswith(".zip")))] | length' "$RELEASE_JSON")
+          mode=upstream
+          version_code=""
+          release_zip_url=""
+          if [ "$r1_count" -gt 0 ]; then
+            mode=r1
+          else
+            release_zip_url=$(jq -r '.assets[] | select((.name | contains("release")) and (.name | endswith(".zip"))) | .browser_download_url' "$RELEASE_JSON" | head -n1)
+          fi
+          if [ "$mode" = upstream ] && [ -z "$release_zip_url" ]; then
             echo "::error::No release zip found in source release assets. Names:"
             jq -r '.assets[].name' "$RELEASE_JSON"
             exit 1
           fi
 
-          git fetch --force --tags origin
-          version_code=$(git rev-list --count "$tag_name")
+          if [ "$mode" = upstream ]; then
+            git fetch --force --tags origin
+            version_code=$(git rev-list --count "$tag_name")
+          fi
 
           write_output() {
             local name="$1"
@@ -94,14 +110,16 @@ jobs:
           write_output "version_code" "$version_code"
           write_output "source_release_json" "$RELEASE_JSON"
           write_output "asset_dir" "$ASSET_DIR"
+          write_output "mode" "$mode"
 
-          jq -c '.assets[] | {name, url, size, digest}' "$RELEASE_JSON" | while read -r asset; do
+          jq -c --arg mode "$mode" '.assets[] | select($mode == "upstream" or ((.name | test("^OhMyKeymint-R1-[A-Za-z0-9.+-]+\\.zip$")))) | {name, url, size, digest}' "$RELEASE_JSON" | while read -r asset; do
             name=$(jq -r '.name' <<< "$asset")
             url=$(jq -r '.url' <<< "$asset")
             digest=$(jq -r '.digest // ""' <<< "$asset")
             output="$ASSET_DIR/$name"
 
             curl --fail --location \
+              --connect-timeout 30 --max-time 300 \
               --header "Authorization: Bearer $GH_TOKEN" \
               --header "Accept: application/octet-stream" \
               --output "$output" \
@@ -118,6 +136,7 @@ jobs:
           done
 
       - name: Checkout changelog branch
+        if: steps.release_info.outputs.mode == 'upstream'
         uses: actions/checkout@v7
         with:
           ref: changelog
@@ -126,6 +145,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update changelog branch
+        if: steps.release_info.outputs.mode == 'upstream'
         id: changelog
         env:
           SOURCE_RELEASE_JSON: ${{ steps.release_info.outputs.source_release_json }}
@@ -141,8 +161,8 @@ jobs:
             --output-dir changelog-branch
 
           cd changelog-branch
-          git config user.name "XiaoYu"
-          git config user.email "2378834248@qq.com"
+          git config user.name "浅笑呐"
+          git config user.email "2082387009@qq.com"
 
           git add changelog.md update.json
           if git diff --cached --quiet; then
@@ -154,3 +174,24 @@ jobs:
           sync_commit=$(git rev-parse HEAD)
           git push origin "HEAD:changelog"
           printf 'sync_commit=%s\n' "$sync_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Update R1 metadata on master
+        if: steps.release_info.outputs.mode == 'r1'
+        env:
+          SOURCE_RELEASE_JSON: ${{ steps.release_info.outputs.source_release_json }}
+          ASSET_DIR: ${{ steps.release_info.outputs.asset_dir }}
+          TAG_NAME: ${{ steps.release_info.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          git pull --ff-only origin master
+          python scripts/update_release_metadata.py \
+            --r1 --release-json "$SOURCE_RELEASE_JSON" \
+            --asset-dir "$ASSET_DIR" --output-dir .
+          git config user.name "浅笑呐"
+          git config user.email "2082387009@qq.com"
+          git add update-lite.json update-no-soter.json update-full.json changelog.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Update R1 metadata for $TAG_NAME"
+            git pull --rebase origin master
+            git push origin "HEAD:master"
+          fi

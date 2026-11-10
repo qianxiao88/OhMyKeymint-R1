@@ -510,8 +510,8 @@ async function updateCloudKeybox(): Promise<void> {
   try {
     if (isDev()) { notify(i18n.t('maintenance_preview_only')); return }
     await afterPaint()
-    await cli.cloudUpdate()
-    notify('获取成功，正在载入')
+    const unchanged = await cli.cloudUpdate()
+    notify(unchanged ? '你的keybox是最新的啦' : '获取成功，正在载入')
     await Promise.all([refreshIdentity(true), refreshDiagnostics()])
   } catch {
     notify('请检查你的网络哟', true)

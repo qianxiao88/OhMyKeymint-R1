@@ -19,15 +19,47 @@ function harness(result) {
   return { cli, calls }
 }
 
-test('cloud update invokes the fixed arm64 helper and requires ok:true', async () => {
-  const { cli, calls } = harness({ errno: 0, stdout: '{"ok":true}\n', stderr: '' })
-  await cli.cloudUpdate()
+test('cloud update invokes the fixed arm64 helper and returns unchanged boolean', async () => {
+  const { cli, calls } = harness({ errno: 0, stdout: '{"ok":true,"unchanged":true}\n', stderr: '' })
+  assert.equal(await cli.cloudUpdate(), true)
+  assert.equal(await harness({ errno: 0, stdout: '{"ok":true,"unchanged":false}', stderr: '' }).cli.cloudUpdate(), false)
   assert.deepEqual(calls, ["'/data/adb/modules/oh_my_keymint/arm64-v8a/r1-helper' 'cloud-update'"])
-  for (const stdout of ['{}', '{"ok":false}', 'not json', '[]']) {
+  for (const stdout of ['{}', '{"ok":false,"unchanged":true}', '{"ok":"true","unchanged":true}',
+    '{"ok":true}', 'not json', '[]', 'null']) {
     await assert.rejects(harness({ errno: 0, stdout, stderr: '' }).cli.cloudUpdate())
+  }
+  for (const unchanged of [null, 0, 1, 'true', 'false', [], {}]) {
+    await assert.rejects(harness({ errno: 0, stdout: JSON.stringify({ ok: true, unchanged }), stderr: '' }).cli.cloudUpdate(),
+      /Invalid R1 cloud update response/)
   }
   await assert.rejects(harness({ errno: 1, stdout: '', stderr: 'Cloud temporarily unavailable' }).cli.cloudUpdate(),
     /Cloud temporarily unavailable/)
+})
+
+test('cloud update shows both success messages, refreshes state, and preserves failure handling', async () => {
+  const app = readFileSync(new URL('../src/vue/App.vue', import.meta.url), 'utf8')
+  const start = app.indexOf('async function updateCloudKeybox(')
+  const end = app.indexOf('\nasync function openFeedback(', start)
+  for (const result of [true, false, new Error('offline')]) {
+    const notifications = []
+    const refreshes = []
+    const cloudBusy = { value: false }
+    const update = vm.runInNewContext(stripTypeScriptTypes(`${app.slice(start, end)}\nupdateCloudKeybox`), {
+      cloudBusy, keyboxBusy: { value: false }, keyboxOpen: { value: false },
+      isDev: () => false,
+      afterPaint: async () => {},
+      cli: { cloudUpdate: async () => { if (result instanceof Error) throw result; return result } },
+      notify: (...args) => notifications.push(args),
+      refreshIdentity: async force => refreshes.push(['identity', force]),
+      refreshDiagnostics: async () => refreshes.push(['diagnostics']),
+    })
+    await update()
+    assert.deepEqual(notifications, result instanceof Error
+      ? [['请检查你的网络哟', true]]
+      : [[result ? '你的keybox是最新的啦' : '获取成功，正在载入']])
+    assert.deepEqual(refreshes, result instanceof Error ? [] : [['identity', true], ['diagnostics']])
+    assert.equal(cloudBusy.value, false)
+  }
 })
 
 test('status validates every field and keeps cloud connectivity separate from running state', async () => {

@@ -484,9 +484,11 @@ function parseSupportedAbi(output: string): SupportedAbi | null {
 }
 
 export class Cli {
-  async cloudUpdate(): Promise<void> {
+  async cloudUpdate(): Promise<boolean> {
     const output = await this.#runR1('cloud-update')
     if (output.ok !== true) throw new Error('Cloud keybox update did not complete')
+    if (typeof output.unchanged !== 'boolean') throw new Error('Invalid R1 cloud update response')
+    return output.unchanged
   }
 
   async getR1Status(): Promise<{ ok: boolean, reason: string, cloud_connected: boolean }> {

@@ -20,6 +20,7 @@ pub const MODULE_ROOT: &str = "/data/adb/modules/oh_my_keymint";
 pub const DATA_ROOT: &str = "/data/misc/keystore/omk/data/r1";
 const STATS_URL: &str = "https://omk.5ijxa.com/api/omk/index.php?action=stats";
 const KEYBOX_URL: &str = "https://omk.5ijxa.com/api/omk/index.php?action=keybox";
+const KEYBOX_PATH: &str = "/data/misc/keystore/omk/keybox.xml";
 const STATS_LIMIT: usize = 8 * 1024;
 const KEYBOX_LIMIT: usize = 64 * 1024;
 const CLOUD_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -514,7 +515,11 @@ pub fn verify_keybox(bytes: &[u8], expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn cloud_update(paths: &Paths, build: &BuildInfo) -> Result<()> {
+fn keybox_unchanged(path: &Path, staged: &[u8]) -> bool {
+    read_file(path, KEYBOX_LIMIT).is_ok_and(|local| local == staged)
+}
+
+fn cloud_update(paths: &Paths, build: &BuildInfo) -> Result<bool> {
     let _lock = Lock::acquire(&paths.data.join("update.lock"), Duration::ZERO)?;
     update_description(
         paths,
@@ -540,6 +545,7 @@ fn cloud_update(paths: &Paths, build: &BuildInfo) -> Result<()> {
     temp.file.sync_all().map_err(|_| "cannot sync staged keybox")?;
     let staged = read_file(&temp.path, KEYBOX_LIMIT)?;
     verify_keybox(&staged, &expected)?;
+    let unchanged = keybox_unchanged(Path::new(KEYBOX_PATH), &staged);
     let payload = STANDARD.encode(&staged);
     let mut args = vec!["--webui-install-keybox".to_string()];
     for chunk in payload.as_bytes().chunks(48 * 1024) {
@@ -563,7 +569,7 @@ fn cloud_update(paths: &Paths, build: &BuildInfo) -> Result<()> {
     if let Err(reason) = update_description(paths, build, DisplayState::Checked(&checked)) {
         eprintln!("r1-helper: keybox imported; status refresh failed: {reason}");
     }
-    Ok(())
+    Ok(unchanged)
 }
 
 fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
@@ -626,17 +632,20 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     let build = BuildInfo::parse(&read_file(&paths.module.join("r1-build.json"), STATS_LIMIT)?)?;
     match command.as_str() {
         "cloud-update" => {
-            if let Err(reason) = cloud_update(&paths, &build) {
-                let checked =
-                    Status { ok: false, reason: single_line(&reason), cloud_connected: false };
-                if let Err(error) =
-                    update_description(&paths, &build, DisplayState::Checked(&checked))
-                {
-                    eprintln!("r1-helper: status refresh failed: {error}");
+            let unchanged = match cloud_update(&paths, &build) {
+                Ok(unchanged) => unchanged,
+                Err(reason) => {
+                    let checked =
+                        Status { ok: false, reason: single_line(&reason), cloud_connected: false };
+                    if let Err(error) =
+                        update_description(&paths, &build, DisplayState::Checked(&checked))
+                    {
+                        eprintln!("r1-helper: status refresh failed: {error}");
+                    }
+                    return Err(reason);
                 }
-                return Err(reason);
-            }
-            println!("{{\"ok\":true}}");
+            };
+            println!("{{\"ok\":true,\"unchanged\":{unchanged}}}");
             Ok(())
         }
         "monitor" => monitor(&paths, &build),

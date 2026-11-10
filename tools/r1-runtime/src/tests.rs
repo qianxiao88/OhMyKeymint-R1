@@ -122,6 +122,26 @@ fn response_limits_include_exact_boundary_and_chunked_reader() {
 }
 
 #[test]
+fn keybox_comparison_is_bounded_read_only_and_byte_exact() {
+    let root = TestRoot::new();
+    let path = root.0.join("keybox.xml");
+    assert!(!keybox_unchanged(&path, b"abc"));
+    assert!(!path.exists());
+    fs::write(&path, b"abc").unwrap();
+    assert!(keybox_unchanged(&path, b"abc"));
+    assert!(!keybox_unchanged(&path, b"abd"));
+    assert!(!keybox_unchanged(&path, b"abc\n"));
+    assert!(read_file(&path, KEYBOX_LIMIT).unwrap() == b"abc");
+    let maximum = vec![b'x'; KEYBOX_LIMIT];
+    fs::write(&path, &maximum).unwrap();
+    assert!(keybox_unchanged(&path, &maximum));
+    let oversized = vec![b'x'; KEYBOX_LIMIT + 1];
+    fs::write(&path, &oversized).unwrap();
+    assert!(!keybox_unchanged(&path, &oversized));
+    assert!(!keybox_unchanged(&root.0, b"abc"));
+}
+
+#[test]
 fn keybox_hash_is_required_strict_and_case_insensitive() {
     let bytes = b"abc";
     let hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
