@@ -148,11 +148,11 @@ const sheets: Record<SheetId, { title: string, actions: ToolAction[] }> = {
   },
 }
 
-const cloudRow: ToolRow = { key: 'cloud', event: 'cloudUpdate', icon: Update, title: '从云端获取key', summary: '' }
-const feedbackRow: ToolRow = { key: 'feedback', event: 'feedback', icon: Info, title: '点击加入反馈群', summary: 'QQ群 608960009' }
+const cloudRow: ToolRow = { key: 'cloud', event: 'cloudUpdate', icon: Update, title: '从云端获取keybox', summary: '从浅笑云端更新keybox' }
+const feedbackRow: ToolRow = { key: 'feedback', event: 'feedback', icon: Info, title: '点击加入反馈群', summary: '点击加入反馈群，不懂的先看公告再进行有效反馈。如觉得此模块不错。可以打赏一下。感谢您的使用。' }
 const wallpaperRow: ToolRow = { key: 'wallpaper', event: 'wallpaper', icon: Photos, title: '背景壁纸', summary: '' }
 const liteRows = computed<ToolRow[]>(() => [
-  { ...cloudRow, title: '云端更新 keybox' },
+  cloudRow,
   { key: 'patch', sheet: 'patch', icon: Update, title: '安全补丁', summary: props.securityPatch ?? '' },
   { key: 'gms', event: 'clearGmsCache', icon: Reset, title: 'GMS 缓存清理', summary: '' },
   { key: 'targets', event: 'openAppTargets', icon: AddCircle, title: '包名添加', summary: '' },

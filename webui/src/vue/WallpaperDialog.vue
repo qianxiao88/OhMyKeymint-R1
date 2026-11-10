@@ -53,6 +53,15 @@ async function toggle(value: boolean): Promise<void> {
   finally { busy.value = false }
 }
 
+async function removeWallpaper(): Promise<void> {
+  if (busy.value || !hasImage.value) return
+  busy.value = true
+  try {
+    apply(await wallpaperStorage({ enabled: false, blob: null }))
+  } catch (error) { report(error) }
+  finally { busy.value = false }
+}
+
 onMounted(async () => {
   try {
     const record = await wallpaperStorage()
@@ -79,6 +88,7 @@ onBeforeUnmount(() => {
       <template #start><MiuixIcon :icon="Photos" :size="23" /></template>
     </MiuixArrowPreference>
     <div class="confirm-actions">
+      <MiuixButton :disabled="busy || !hasImage" @click="removeWallpaper">移除壁纸</MiuixButton>
       <MiuixButton :disabled="busy" @click="open = false">关闭</MiuixButton>
     </div>
   </MiuixDialog>

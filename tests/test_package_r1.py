@@ -154,7 +154,9 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(props["versionCode"], "301")
                 self.assertEqual(props["version"], f"1.3.8-301-{variant}")
                 self.assertIn("\u5f85\u542f\u52a8\u68c0\u67e5", props["description"])
-                self.assertNotIn("updateJson", props)
+                self.assertEqual(props["updateJson"],
+                    "https://raw.githubusercontent.com/qianxiao88/OhMyKeymint-R1/"
+                    f"master/update-{variant}.json")
                 self.assertEqual(manifest["version"], props["version"])
                 self.assertEqual(manifest["variant"], variant)
                 self.assertEqual(manifest["upstream_commit"], r1.UPSTREAM_COMMIT)

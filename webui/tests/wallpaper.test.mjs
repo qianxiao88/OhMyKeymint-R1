@@ -131,6 +131,16 @@ test('wallpaper storage failures reject and close database handles', async () =>
   await assert.rejects(harness().wallpaperStorage(), /does not provide wallpaper storage/)
 })
 
+test('removal persists an empty disabled record across reopening', async () => {
+  const db = database()
+  const { wallpaperStorage } = harness({ indexedDB: db.indexedDB })
+  await wallpaperStorage({ enabled: true, blob: png() })
+  await wallpaperStorage({ enabled: false, blob: null })
+  const restored = await wallpaperStorage()
+  assert.equal(restored.enabled, false)
+  assert.equal(restored.blob, null)
+})
+
 test('wallpaper replacement and disable update the live surface and release previous Blob URLs', () => {
   const component = readFileSync(new URL('../src/vue/WallpaperDialog.vue', import.meta.url), 'utf8')
   const start = component.indexOf('function apply(')
@@ -159,4 +169,80 @@ test('wallpaper replacement and disable update the live surface and release prev
   assert.equal(surface.enabled.value, false)
   assert.equal(surface.hasImage.value, true)
   assert.deepEqual(revoked, ['blob:wallpaper-1', 'blob:wallpaper-2'])
+  surface.apply({ enabled: true, blob: png() })
+  surface.apply({ enabled: false, blob: null })
+  assert.equal(surface.hasImage.value, false)
+  assert.equal(properties.get('--r1-wallpaper'), 'none')
+  assert.deepEqual(revoked, ['blob:wallpaper-1', 'blob:wallpaper-2', 'blob:wallpaper-3'])
+})
+
+function dialogHarness(storage) {
+  const component = readFileSync(new URL('../src/vue/WallpaperDialog.vue', import.meta.url), 'utf8')
+  const script = component.split('<script setup lang="ts">')[1].split('</script>')[0]
+    .replace(/^import .*$/gm, '')
+  let mounted, unmount, serial = 0
+  const revoked = [], errors = []
+  const properties = new Map()
+  const document = { documentElement: { dataset: {}, style: {
+    setProperty: (key, value) => properties.set(key, value),
+    removeProperty: key => properties.delete(key),
+  } } }
+  const state = vm.runInNewContext(`${stripTypeScriptTypes(script)}\n;({ apply, toggle, removeWallpaper, busy, enabled, hasImage })`, {
+    document, defineModel: () => ({ value: false }), defineEmits: () => (...args) => errors.push(args),
+    ref: value => ({ value }), onMounted: callback => { mounted = callback },
+    onBeforeUnmount: callback => { unmount = callback }, validateWallpaper: async () => {},
+    wallpaperStorage: storage,
+    URL: { createObjectURL: () => `blob:dialog-${++serial}`, revokeObjectURL: url => revoked.push(url) },
+  })
+  return { ...state, mount: () => mounted(), unmount: () => unmount(), revoked, errors, properties, document }
+}
+
+test('dialog keeps disabling separate from removal and releases URLs on removal and unmount', async () => {
+  let saved = { enabled: true, blob: png() }
+  const writes = []
+  const dialog = dialogHarness(async record => {
+    if (record) { saved = record; writes.push(record) }
+    return saved
+  })
+  await dialog.mount()
+  await dialog.toggle(false)
+  assert.ok(saved.blob instanceof Blob)
+  await dialog.toggle(true)
+  await dialog.removeWallpaper()
+  assert.equal(saved.enabled, false)
+  assert.equal(saved.blob, null)
+  assert.equal(dialog.enabled.value, false)
+  assert.equal(dialog.hasImage.value, false)
+  assert.deepEqual(dialog.revoked, ['blob:dialog-1', 'blob:dialog-2'])
+  await dialog.removeWallpaper()
+  assert.equal(writes.length, 3)
+  dialog.apply({ enabled: true, blob: png() })
+  dialog.unmount()
+  assert.deepEqual(dialog.revoked, ['blob:dialog-1', 'blob:dialog-2', 'blob:dialog-3'])
+  assert.equal(dialog.properties.has('--r1-wallpaper'), false)
+  assert.equal(dialog.document.documentElement.dataset.r1Wallpaper, undefined)
+  dialog.apply({ enabled: true, blob: png() })
+  assert.equal(dialog.properties.size, 0)
+})
+
+test('removal waits for persistence, rejects concurrent actions and preserves wallpaper on failure', async () => {
+  let rejectWrite
+  const dialog = dialogHarness(record => record
+    ? new Promise((_resolve, reject) => { rejectWrite = reject })
+    : Promise.resolve({ enabled: true, blob: png() }))
+  await dialog.mount()
+  const pending = dialog.removeWallpaper()
+  assert.equal(dialog.busy.value, true)
+  await dialog.toggle(false)
+  await dialog.removeWallpaper()
+  assert.equal(dialog.hasImage.value, true)
+  assert.deepEqual(dialog.revoked, [])
+  rejectWrite(new Error('Storage failed'))
+  await pending
+  assert.equal(dialog.busy.value, false)
+  assert.equal(dialog.enabled.value, true)
+  assert.equal(dialog.hasImage.value, true)
+  assert.deepEqual(dialog.revoked, [])
+  assert.equal(dialog.errors.length, 1)
+  dialog.unmount()
 })

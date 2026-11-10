@@ -210,13 +210,13 @@ def properties(base: bytes, stem: str, variant: str) -> bytes:
         "name": stem, "version": f"{BRAND}-{variant}", "versionCode": "301",
         "author": AUTHOR,
         "description": "\u5f85\u542f\u52a8\u68c0\u67e5 | R1 " + variant + "; upstream 1.4.2 (precompiled)",
+        "updateJson": ("https://raw.githubusercontent.com/qianxiao88/OhMyKeymint-R1/"
+                       f"master/update-{variant}.json"),
     }
     result = []
     found = set()
     for line in base.decode("utf-8").splitlines():
         key = line.split("=", 1)[0].strip()
-        if key == "updateJson":
-            continue
         if key in values:
             if key not in found:
                 result.append(f"{key}={values[key]}")

@@ -1,47 +1,164 @@
-// A single fixed bitmap sits behind the existing MIUIX surfaces.
-html {
-  --r1-glass: rgb(255 255 255 / 78%);
-  --omk-top-bar-fill: var(--r1-glass);
-  --omk-bar-background: var(--r1-glass);
-  &.m-theme-dark { --r1-glass: rgb(25 25 25 / 82%); }
-  .m-card, .m-surface, .target-app-row, .m-top-app-bar, .m-navigation-bar {
-    background: var(--r1-glass) !important;
-    -webkit-backdrop-filter: blur(18px);
-    backdrop-filter: blur(18px);
-    border: 1px solid rgb(128 128 128 / 16%);
-  }
-  .status-hero, .identity-card, .diagnostics-card, .preference-card, .settings-card {
-    border-radius: 8px;
+// Keep the bitmap untouched; contrast belongs to local, solid text backplates.
+:root {
+  --r1-paper: #f7fafc;
+  --r1-ink: #18232d;
+  --r1-muted: #475563;
+  --r1-accent: #155a9c;
+  --r1-error: #a32525;
+  --r1-glass: rgb(255 255 255 / 22%);
+  --r1-edge: rgb(255 255 255 / 70%);
+  --r1-shadow: rgb(22 42 60 / 12%);
+  --r1-canvas: linear-gradient(155deg, #f3f8fc, #e5eef4 60%, #edf5f4);
+  &.m-theme-dark {
+    --r1-paper: #19232c;
+    --r1-ink: #f1f6fa;
+    --r1-muted: #bdcbd7;
+    --r1-accent: #9dccff;
+    --r1-error: #ffb4b4;
+    --r1-glass: rgb(24 36 46 / 28%);
+    --r1-edge: rgb(224 241 255 / 25%);
+    --r1-shadow: rgb(0 0 0 / 24%);
+    --r1-canvas: linear-gradient(155deg, #15202a, #1e2c36 60%, #203330);
   }
 }
+
 html::before {
   content: '';
   position: fixed;
   inset: 0;
   z-index: 0;
   background-image: var(--r1-wallpaper, none);
-  background-size: cover;
+  background-size: contain;
   background-position: center;
+  background-repeat: no-repeat;
   pointer-events: none;
 }
-html[data-r1-wallpaper='true'] {
-  background: var(--m-color-surface);
-  body, #app, .omk-app, .page-host, .settings-view, .targets-view { background: transparent; }
-  #app { position: relative; z-index: 1; }
-  .targets-top-bar { background: var(--r1-glass); }
-  --omk-top-bar-fill: var(--r1-glass);
-  --omk-bar-background: var(--r1-glass);
+
+// The ID deliberately outranks app.scss's preference/Monet selectors and
+// Vue's scoped backgrounds without changing component layout or behavior.
+html:root:is(html, #app) {
+  --omk-top-bar-fill: transparent;
   --omk-system-bar-background: transparent;
-  --r1-glass: rgb(255 255 255 / 78%);
-  &.m-theme-dark { --r1-glass: rgb(25 25 25 / 82%); }
-  .m-card, .m-surface, .target-app-row, .m-top-app-bar, .m-navigation-bar {
-    background: var(--r1-glass) !important;
-    -webkit-backdrop-filter: blur(18px);
-    backdrop-filter: blur(18px);
-    border-color: rgb(255 255 255 / 20%);
+}
+html:root:is(html, #app) {
+  background: var(--r1-canvas);
+  body, #app, .omk-app, .page-host, .settings-view, .targets-view { background: transparent !important; }
+  #app { position: relative; z-index: 1; }
+
+  // Full-width layers never sample or veil the wallpaper.
+  body::before, body::after,
+  .m-top-app-bar, .targets-top-bar, .m-top-app-bar::before, .targets-top-bar::before {
+    background: transparent !important;
+    border: 0;
+    box-shadow: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
   }
-  .status-hero, .identity-card, .diagnostics-card, .preference-card, .settings-card {
-    border-radius: 8px;
+
+  :is(#app, body) { color: var(--r1-ink); }
+  :is(.m-card, .m-surface, .target-app-row, .main-navigation,
+      .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup) {
+    background: var(--r1-glass) !important;
+    border: 1px solid var(--r1-edge) !important;
+    border-radius: 24px;
+    box-shadow: inset 0 1px 0 var(--r1-edge), 0 4px 16px var(--r1-shadow) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    color: var(--r1-ink);
+  }
+
+  // Solid islands guarantee readable text over any image, independent of blur.
+  :is(.m-basic-component__center, .m-basic-component__end,
+      .status-hero__text, .identity-field, .diagnostics-heading h2,
+      .diagnostics-heading > span, .diagnostics-service, .diagnostics-empty,
+      .m-small-title .m-text, .m-top-app-bar__title > .m-text,
+      .page-large-title, .r1-about, .targets-selection-heading,
+      .targets-user-heading, .targets-auto-state, .targets-empty,
+      .scale-preference__header, .confirm-sheet > p, .rkp-loading,
+      .rkp-fingerprint-field, .rkp-issued-item__metadata,
+      .file-path, .file-status > span, .file-status > p,
+      .pif-preview, .pif-status > span, .pif-sheet h3, .current-config-values,
+      .soter-note, .soter-error, .soter-cpu-field, .soter-local-sheet > strong,
+      .soter-identity-heading > strong,
+      .m-dialog__title, .m-dialog__summary, .m-bottom-sheet__title) {
+    background: var(--r1-paper);
+    color: var(--r1-ink) !important;
+    border-radius: 10px;
+    padding: 4px 6px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    overflow-wrap: anywhere;
+  }
+  :is(.m-basic-component__center, .m-basic-component__end, .status-hero__text,
+      .identity-field, .diagnostics-service, .scale-preference__header,
+      .rkp-issued-item__metadata, .current-config-values) :is(.m-text, span, strong, dt, dd, small, div, code) {
+    color: var(--r1-ink) !important;
+    opacity: 1;
+  }
+  :is(.m-basic-component__center .m-text--body2, .status-hero__text span,
+      .identity-field > span, .diagnostics-service dt, .diagnostics-service small,
+      .settings-dropdown__value, .scale-preference__summary, .scale-preference__value) {
+    color: var(--r1-muted) !important;
+  }
+  .diagnostics-service dd[data-tone='ok'] { color: var(--r1-accent) !important; }
+  .diagnostics-service dd[data-tone='error'] { color: var(--r1-error) !important; }
+
+  :is(.m-button, .m-icon-button, .target-app-settings, .m-dropdown-preference__item,
+      .m-navigation-bar__label, .m-navigation-bar__icon, input, textarea) {
+    background: var(--r1-paper) !important;
+    color: var(--r1-ink) !important;
+    border-radius: 16px;
+  }
+  .m-button { white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
+  .m-button--primary { box-shadow: inset 0 0 0 2px var(--r1-accent); color: var(--r1-accent) !important; }
+  :is(.m-button--disabled, .m-icon-button--disabled, .m-basic-component--disabled) {
+    opacity: 1;
+    color: var(--r1-muted) !important;
+  }
+  :is(button, input, textarea, .m-basic-component):focus-visible {
+    outline: 2px solid var(--r1-accent);
+    outline-offset: -2px;
+  }
+
+  .main-navigation { border-radius: 32px; }
+  .m-navigation-bar__item { opacity: 1 !important; }
+  .m-navigation-bar__item--selected .m-navigation-bar__label {
+    color: var(--r1-accent) !important;
+    box-shadow: inset 0 -2px var(--r1-accent);
+  }
+  .m-navigation-bar__label { padding: 2px 6px; }
+  .m-navigation-bar__icon { border-radius: 50%; }
+  .m-top-app-bar__title { opacity: 1 !important; min-width: 0; }
+  .m-top-app-bar__title > .m-text { max-width: 100%; }
+  .page-large-title, .r1-about { width: fit-content; max-width: 100%; opacity: 1; }
+  .m-small-title .m-text { display: inline-block; }
+  .sheet-actions { background: transparent; }
+  .tools-page > .page-large-title, .settings-content > .page-large-title { display: none; }
+  .settings-section + .settings-section { margin-top: 8px; }
+  .preference-section > .m-small-title, .settings-section > .m-small-title { padding-block: 6px; }
+
+  // Blur is restricted to small interactive surfaces; panels stay sharp.
+  :is(.m-icon-button, .target-app-settings) {
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    box-shadow: inset 0 0 0 1px var(--r1-edge);
+  }
+  .targets-menu-popup {
+    background: var(--r1-paper) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  .m-dialog__backdrop, .m-bottom-sheet__backdrop { background: transparent; }
+  .m-bottom-sheet__overscroll { background: var(--r1-paper); }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    :is(.m-card, .m-surface, .target-app-row, .main-navigation,
+        .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup) {
+      background: var(--r1-paper) !important;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
 }
 .r1-module-name { font-size: 24px; line-height: 1.3; overflow-wrap: anywhere; }

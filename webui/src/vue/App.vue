@@ -511,10 +511,10 @@ async function updateCloudKeybox(): Promise<void> {
     if (isDev()) { notify(i18n.t('maintenance_preview_only')); return }
     await afterPaint()
     await cli.cloudUpdate()
-    notify('云端 Keybox 导入成功')
+    notify('获取成功，正在载入')
     await Promise.all([refreshIdentity(true), refreshDiagnostics()])
-  } catch (error) {
-    notify(error instanceof Error ? error.message : String(error), true)
+  } catch {
+    notify('请检查你的网络哟', true)
   } finally { cloudBusy.value = false }
 }
 
