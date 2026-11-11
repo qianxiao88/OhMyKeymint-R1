@@ -206,9 +206,11 @@ def replace_once(data: bytes, anchor: bytes, replacement: bytes) -> bytes:
 
 
 def properties(base: bytes, stem: str, variant: str) -> bytes:
+    upstream_author = next((line[7:].strip() for line in base.decode("utf-8").splitlines()
+                            if line.startswith("author=")), "")
     values = {
         "name": stem, "version": f"{BRAND}-{variant}", "versionCode": "301",
-        "author": AUTHOR,
+        "author": f"{upstream_author},{AUTHOR}" if upstream_author else AUTHOR,
         "description": "\u5f85\u542f\u52a8\u68c0\u67e5 | R1 " + variant + "; upstream 1.4.2 (precompiled)",
         "updateJson": ("https://raw.githubusercontent.com/qianxiao88/OhMyKeymint-R1/"
                        f"master/update-{variant}.json"),

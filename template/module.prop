@@ -2,5 +2,5 @@ id=oh_my_keymint
 name=OhMyKeymint-R1-1.3.8-301-full
 version=${versionName}
 versionCode=${versionCode}
-author=浅笑呐
+author=James Clef,ITxiao6666,浅笑呐
 description=OMK-R1 待启动检查。运行状态及云端连接结果将在启动后更新。

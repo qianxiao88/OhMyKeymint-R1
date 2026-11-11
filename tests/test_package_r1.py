@@ -150,7 +150,7 @@ class PackageTests(unittest.TestCase):
                 self.assertRegex(name, rf"^OhMyKeymint-R1-1\.3\.8-301-{variant}-[0-9a-f]{{7}}\.zip$")
                 props = dict(line.split("=", 1) for line in entries["module.prop"][0].decode().splitlines())
                 self.assertEqual(props["name"], name[:-4])
-                self.assertEqual(props["author"], "\u6d45\u7b11\u5450")
+                self.assertEqual(props["author"], "James Clef,ITxiao6666,\u6d45\u7b11\u5450")
                 self.assertEqual(props["versionCode"], "301")
                 self.assertEqual(props["version"], f"1.3.8-301-{variant}")
                 self.assertIn("\u5f85\u542f\u52a8\u68c0\u67e5", props["description"])
@@ -163,6 +163,16 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual(manifest["upstream_version"], "1.4.2")
                 self.assertFalse(manifest["native_rebuilt"])
                 self.assertEqual(json.loads(entries["r1-build.json"][0]), manifest)
+
+    def test_author_is_appended_to_original_metadata(self):
+        for original in ("Original Author,Contributor", "", None):
+            with self.subTest(original=original):
+                base = b"id=oh_my_keymint\n"
+                if original is not None:
+                    base += f"author={original}\n".encode()
+                result = r1.properties(base, "R1", "full").decode().splitlines()
+                authors = [line[7:] for line in result if line.startswith("author=")]
+                self.assertEqual(authors, [f"{original},{r1.AUTHOR}" if original else r1.AUTHOR])
 
     def test_last_seven_hash_and_determinism(self):
         name, entries, manifest = self.variant()
