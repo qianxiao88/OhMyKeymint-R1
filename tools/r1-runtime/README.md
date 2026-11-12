@@ -1,13 +1,12 @@
 # R1 Runtime
 
-Independent Rust stable helper for `aarch64-linux-android` (Android 12-17).
-Binary: `r1-helper`. This directory is its own Cargo workspace. The main agent
-supplies Rust stable, the Android NDK linker and packaging; this implementation
-has not been built, installed, or executed on an Android device.
+Independent Rust helper for `aarch64-linux-android` (Android 12-17).
+Binary: `r1-helper`. This directory is its own Cargo workspace. Packaging
+supplies the Android linker, `r1-build.json`, and monitor startup.
 
 ## Runtime
 
-Run as root using the packaged binary:
+Packaged root commands:
 
 ```sh
 /data/adb/modules/oh_my_keymint/arm64-v8a/r1-helper status
@@ -15,158 +14,182 @@ Run as root using the packaged binary:
 /data/adb/modules/oh_my_keymint/arm64-v8a/r1-helper monitor
 ```
 
-The module root is fixed at `/data/adb/modules/oh_my_keymint`. The private data
-directory is `/data/misc/keystore/omk/data/r1/` (0700). Unit tests inject both
-roots through `Paths`; command-line root overrides are deliberately absent.
-The packager supplies `r1-build.json` in the module root:
+The module root is fixed at `/data/adb/modules/oh_my_keymint`. The private
+state directory is `/data/misc/keystore/omk/data/r1/` (0700). Unit tests inject
+private temporary module/state roots; the production CLI has no overrides.
+The packager supplies:
 
 ```json
-{"version":"1.3.8-301-full","hash":"abc1234","variant":"full"}
+{"version":"1.3.8-302-full","hash":"abc1234","variant":"full"}
 ```
 
-Versions accept 1-80 ASCII alphanumeric or `.-_+` characters. Hashes accept
-7-64 hexadecimal characters; descriptions use the final seven. Variants are
-`full` or `lite`. `author` remains the packager's responsibility.
+Versions accept 1-80 ASCII alphanumeric or `.-_+` characters; hashes accept
+7-64 hexadecimal characters. Descriptions use the final seven hash characters.
+Variants are `full`, `no-soter`, or `lite`. Packaging owns `author`.
 
-- `status` calls the current module's `arm64-v8a/keymint
-  --webui-get-diagnostics`, requiring `keymint`, `keystore2`, and `injector`
-  each to have `status: "running"` and a positive integer PID. It emits
-  `{ "ok": boolean, "reason": string, "cloud_connected": boolean }`.
-  Exit status is nonzero when unhealthy. Cloud connectivity comes from the
-  latest actual stats observation in private `cloud.json`, valid for less
-  than six hours. A missing, corrupt, expired, or future-dated observation
-  fails closed. `status` itself performs no network request or persistent write.
-- `monitor` holds `monitor.lock` with nonblocking `flock` for its entire life.
-  Lock files stay in place; kernel locks release on process death. It waits
-  for `/system/bin/getprop sys.boot_completed` to return `1`, then diagnoses
-  locally every 60 seconds. Local failures receive a separate waiting
-  description during the first 120 seconds after boot readiness. Cloud stats
-  are fetched immediately after boot readiness and every six hours thereafter,
-  including retries following failed checks. Cloud failures after local
-  readiness produce a failure description. Packaging must arrange startup;
-  the helper creates no service or automatic startup configuration.
-- `cloud-update` serializes updates with `update.lock`, stages the response in
-  a create-new 0600 temporary file, requires `X-Keybox-Sha256`, hashes the
-  staged bytes, and delegates certificate/private-key validation and atomic
-  installation to the existing native CLI. It then refreshes actual stats,
-  local diagnostics and the module description. Successful import emits
-  exactly `{"ok":true}`; subsequent status-refresh errors are warnings on
-  stderr and do not change that successful import result.
+- `status` runs the module or hot-update KeyMint's lightweight
+  `--webui-get-runtime-health` command. It does not initialize Binder or query
+  hardware/RKP. KeyMint must match the deployed image; keystore2 must be the
+  actual system executable; injector readiness requires a verified executable
+  payload mapping in that keystore2 process. A supervisor alone is configured,
+  not running, and unreadable mappings are unknown. Process/mapping evidence
+  does not establish the injected RPC session's liveness.
+  A failed health sample is confirmed once after 300 ms, with a five-second
+  deadline per command. JSON `ok` and `reason` describe local health.
+  `phase` is `running`, `checking`, `degraded` or `failed`; `cloud_phase` is
+  `connected`, `pending` or `offline`. `cloud_connected`, `cloud_reason` and
+  `cloud_checked_at` describe verified cloud observations from the current boot.
+  Missing, old-boot, corrupt, expired or future observations remain pending.
+  A successful verified stats response or validated Keybox update proves a
+  connection; a Keybox error remains separate in `keybox_update`/`keybox_reason`.
+  `keybox_checked_at` and `next_cloud_check_at` retain update/schedule details
+  without key material. Original `ok`, `reason`, `cloud_connected` consumers
+  remain compatible. This command makes no network request or persistent write.
+- `monitor` holds `monitor.lock` for its lifetime, waits for Android boot
+  completion, and diagnoses locally every 60 seconds. Local failures have a
+  120-second startup grace. After a healthy observation, a new failure gets a
+  30-second checking window; monitoring retries after five seconds while checking
+  and reports persistent failures rather than retaining an old success. Failed
+  boot-property probes retry instead of terminating the monitor. After the local
+  services become healthy it checks
+  stats and automatically downloads/installs a changed cloud Keybox, then
+  repeats about every six hours. A restarted monitor checks immediately after
+  readiness when the previous check succeeded; an outstanding failure backoff
+  is preserved across restarts. Local failure delays cloud work until services
+  recover. Cloud errors do not change local health or terminate monitoring.
+- Failed cloud checks retry after 15 minutes, 30 minutes, one hour, two hours,
+  four hours, then at most every six hours. A fully successful check resets
+  the backoff. The schedule is stored atomically with the cloud observation.
+  If writing that schedule fails, the running monitor still backs off for at
+  least 15 minutes rather than contacting the cloud every local polling cycle.
+- `cloud-update` performs an immediate serialized check, bypassing the schedule.
+  It prints `{"ok":true,"unchanged":false}` for a confirmed import, or
+  `{"ok":true,"unchanged":true}` when no import is needed. Network, integrity,
+  native validation, acknowledgement, and state-write failures return errors.
+  Description-refresh failures are reported separately after the update result.
 
-## Native CLI Contract
+## Download, Cache And Import
 
-The checked-in `src/main.rs` and `webui/src/cli.ts` expose
-`--webui-install-keybox <base64 chunks>` for import, with 48 KiB chunks and an
-`ok` acknowledgement. The helper uses this exact interface; a literal
-`keybox import <file>` subcommand would enter the daemon path in this revision.
-The additional `base64` dependency uses the same standard encoding as WebUI.
-The native parser validates before its metadata-preserving atomic keybox
-replacement. The existing `keybox::initialize` file watcher reloads the keybox;
-the helper sends no extra reload signal and changes no authentication or
-injection logic. Existing keybox bytes remain untouched until native import.
-An import timeout or unexpected acknowledgement has an uncertain outcome if
-the native atomic replacement already happened; verify installed state before
-retrying. The helper never writes or restores the live keybox itself.
+All update operations use the same nonblocking `update.lock`: the monitor
+skips a busy updater, while manual callers receive a busy result. The lock
+covers network requests, import and atomic cache/schedule writes. Files stay
+in place so process death releases kernel `flock` without creating a second
+lock inode. `description.lock` separately serializes property updates.
 
-Native stdout is bounded and native stderr is suppressed. Errors never include
-downloaded XML, Base64, private keys, or native error bodies. The current native
-interface carries Base64 in argv, visible to privileged process inspection for
-the short import lifetime. A file/stdin native import interface would require
-a separate change outside this directory. Temporary files are removed through
-RAII on normal success and every returned-error/unwind path. SIGKILL, power
-loss and process abort can leave a 0600 staging file in the private directory;
-the monitor never imports abandoned staging files.
+On HTTP 200 the helper reads at most 64 KiB, requires an exactly 64-hex
+`X-Keybox-Sha256` header, verifies SHA-256 and compares the local file byte for
+byte. Identical content skips staging, native import and watcher reload.
+Only the small observation/cache metadata is saved once per completed check;
+no Keybox is rewritten, no restart is requested, and identical descriptions
+also skip their write.
 
-## Cloud Protocol
+Changed content is staged in a create-new 0600 temporary file in the private
+directory, synced and reverified. The existing native
+`--webui-install-keybox <base64 chunks>` performs XML/private-key/certificate
+validation and atomic metadata-preserving replacement. Base64 chunks are
+48 KiB, matching WebUI. The helper requires `ok` and then verifies the installed
+file's digest before advancing its successful cache. The existing watcher
+reloads KeyMint; the helper sends no additional signal or restart command.
+It never writes the live Keybox itself.
 
-Both requests use certificate-verified HTTPS with rustls and Mozilla WebPKI
-roots. `ureq ~3.1` disables default features and explicitly enables `rustls`
-(in 3.1 this enables the internal TLS support and WebPKI roots; there is no
-public feature named `tls`). Redirects, environment proxies, compression and
-cookies are disabled. Only HTTP 200 is accepted. Header limit: 8 KiB.
-Timeouts: DNS 5 seconds, connect/TLS 10 seconds, response headers 10 seconds,
-response body 15 seconds, whole request including DNS/body 30 seconds.
+If provided, HTTP `ETag` and `Last-Modified` are stored only after confirmed
+installation or byte equality. A later request sends `If-None-Match` and/or
+`If-Modified-Since` only while the current local file matches that successful
+SHA-256. Missing or changed local files require an unconditional full download.
+HTTP 304 is accepted only for such a conditional request, with a second local
+digest check. An optional SHA-256 header on 304 must also match. No 304 body is
+read, no import is attempted, and returned validators update the same cache.
+A 200 without validators clears old validators. Header values are bounded and
+sanitized before storage/use. Failed imports retain the previous successful
+cache and timestamp, so a failed version never becomes a successful 304 hit.
+
+Native stdout and network bodies are bounded; native stderr is suppressed.
+Errors never include downloaded XML, Base64, private keys, HTTP response bodies
+or hashes. The native interface carries Base64 in argv for the short import
+lifetime. A file/stdin interface would require a change outside this crate.
+An import timeout or unexpected acknowledgement may follow a native replacement;
+the next check compares actual installed bytes before deciding to import again.
+Temporary files are removed on every normal/error/unwind path. SIGKILL or power
+loss can leave private staging files; they are never imported automatically.
+
+## Cloud Protocol And Bounds
 
 ```text
 GET https://omk.5ijxa.com/api/omk/index.php?action=stats
 GET https://omk.5ijxa.com/api/omk/index.php?action=keybox
 ```
 
+Requests use certificate-verified HTTPS, rustls and Mozilla WebPKI roots.
+`ureq ~3.1` has default features disabled and `rustls` explicitly enabled.
+Redirects, environment proxies, compression and cookies are disabled. Stats
+accepts only 200; Keybox accepts 200 or a valid conditional 304. Header limit
+is 8 KiB. Timeouts: DNS 5 seconds, connect/TLS 10 seconds, response headers
+10 seconds, response body 15 seconds, complete request 30 seconds.
+
 Stats body limit is 8 KiB, including responses without Content-Length. It must
-be a JSON object with nonnegative integer `devices`, `peak`, `keybox_distinct`,
+be an object with nonnegative integer `devices`, `peak`, `keybox_distinct`,
 `version_code`, product exactly `OhMyKeymint-R1`, and nonempty string `version`
-and `updated_at`. Zero devices is valid. HTML, arrays, stringified counts,
-booleans, fractional counts and partial responses fail validation. This schema
-matches the supplied cloud `public/index.php`. Keybox body limit is 64 KiB;
-the required SHA-256 header is exactly 64 hexadecimal characters. XML validity
-is decided by the original native importer. Hash verification provides
-transport consistency; HTTPS authenticates the server.
+and `updated_at`. Zero devices is valid. Stats metadata is not a Keybox version;
+the Keybox endpoint's conditional response or verified bytes determine changes.
+A stats failure does not prevent a valid Keybox import. A successful verified
+stats response or validated Keybox response establishes connectivity. Keybox
+failure remains separate from connectivity and retains the update retry backoff;
+a successful Keybox response also permits normal scheduling when stats is down.
 
-No persistent module/device identifier is generated or uploaded. There is no
-POST `report`, heartbeat, keybox hash upload, or private-key upload. The cloud
-report protocol (`module_id` matching `^omk-[a-f0-9]{16,64}$`, optional
-`keybox_sha256`, boolean `ok` plus `interval` reply) is intentionally unused.
-Stats success proves stats endpoint connectivity and protocol validity; this
-client will not contribute to the server's reported online-device count.
-Normal HTTPS network metadata (including source IP) remains visible to the
-server. Cloud state is only the verified outcome, timestamp and safe reason.
+No device/module identifier is generated or uploaded. There is no POST report,
+heartbeat, private-key upload, or Keybox hash upload. Persisted cloud state
+contains observations, a local boot identifier used only for cache freshness,
+retry schedule, successful digest and HTTP cache validators. The boot identifier
+is never transmitted. Stats success does not contribute to the server's device count.
 
-## Description And Bounds
+Native commands have a five-second deadline per health sample, a 20-second
+import deadline, or three seconds for getprop, with nonblocking bounded stdout
+and bounded process-group cleanup.
+Descriptions flatten control characters, CR/LF and Unicode line separators.
+Only `description=` changes; other properties and permission bits are preserved.
+Replacement is synced, renamed atomically, then its parent is synced. Symlinked
+`module.prop` is rejected. Ownership/SELinux labels need packaged-device testing.
+Description success requires both healthy local KeyMint/keystore2/injector
+services and a fresh validated cloud connection. It uses the packaged version
+and final seven content-hash characters. Core JSON `ok` remains independent
+from the cloud; the combined description reports a cloud connection failure
+with its specific reason. Keybox update details remain in the JSON status.
+Startup grace and pending/expired/old-boot cloud evidence retain a neutral
+checking message until a result is available; confirmed local or cloud failures
+use the requested failure text with specific reasons. Health is resampled after
+network work before updating the description.
 
-Success requires both healthy local diagnostics and a fresh successful stats
-response. Success/error copy follows the requested R1 text. Boot, service grace
-and active checks have separate waiting copy. Reasons are length-limited and
-flatten CR/LF, control characters and Unicode line/paragraph separators.
-Only `description=` is replaced; all other module properties, including
-`author`, are preserved. A short shared file lock serializes read-modify-write.
-Replacement uses a same-directory temporary file, preserves permission bits,
-syncs it, renames atomically and syncs the parent directory. Symlinked
-`module.prop` is rejected. Mode preservation covers file permissions; SELinux
-labels and ownership follow creation in the module directory and need device
-verification in the packaged Magisk/KernelSU environment.
-
-Every native invocation has a deadline: 20 seconds for diagnostics/import,
-3 seconds for getprop. Stdout uses nonblocking bounded reads. Deadline/error
-cleanup kills the child's dedicated process group and polls reaping for at
-most one further second, avoiding an unbounded `wait`. Monitor polling and
-sleeping are intentional long-lived behavior. Description lock acquisition
-is limited to three seconds; duplicate monitors/updates fail immediately.
-
-## Main-Agent Verification
-
-Commands below are for the agent preparing the toolchain; they were not run
-during implementation. Run from this directory with the Android NDK linker
-already configured. Use a stable toolchain; no parent workspace configuration
-or nightly feature is required by this crate.
-
-```sh
-cargo +stable fmt --all
-cargo +stable fmt --all -- --check
-cargo +stable clippy --target aarch64-linux-android --all-targets -- -D warnings
-cargo +stable test --target aarch64-linux-android --no-run
-cargo +stable build --release --target aarch64-linux-android --bin r1-helper
+```text
+✅ OMK-R1-（1.3.8-302-full）-（abc1234）已成功运行。已成功连接云端。等着被我格你机机吧😄 【本模块由【浅笑呐】二改自用，属免费模块，倒卖可耻。】
+❌ OMK-R1 运行失败。（injector is stopped）你卸载吧。
 ```
 
-Deploy the generated `target/aarch64-linux-android/debug/deps/r1_runtime-*`
-test executable to an authorized arm64 Android device and execute it there.
-An explicitly configured Android Cargo runner may also use:
+## Validation
+
+Use a modern Rust toolchain and the repository's configured Android NDK linker.
+This crate uses no nightly language features. On the prepared environment:
 
 ```sh
-cargo +stable test --target aarch64-linux-android --lib
+export PATH=/root/.cargo/bin:$PATH
+export CARGO_TARGET_DIR=/root/omk-build/r1-runtime-target
+cargo +nightly fmt --manifest-path tools/r1-runtime/Cargo.toml --all -- --check
+cargo +nightly clippy --manifest-path tools/r1-runtime/Cargo.toml \
+  --target aarch64-linux-android --workspace --all-targets -- -D warnings
+cargo +nightly test --manifest-path tools/r1-runtime/Cargo.toml \
+  --target aarch64-linux-android --workspace --no-run
 ```
 
-Tests cover descriptions, startup grace, single-line reasons, diagnostics,
-cloud schema/types, body limits, hashes/build metadata, property preservation
-and mode, private staging/cleanup, exclusive locks, stale cloud observations,
-and subprocess timeout/output limits. Real TLS failure/timeout, Binder
-diagnostics, native certificate rejection/old-keybox preservation, watcher
-reload, SELinux permissions and monitor startup require Android integration
-verification. No Android device validation is claimed.
+Run the generated Android test executables in an Android test environment
+using a non-root test account and private temporary directory, or set an
+explicit Cargo runner. Tests use mock bytes (not real XML/certificates), a
+loopback HTTP fixture server and injected temporary roots; they do not contact
+the cloud or invoke the product CLI against `/data`.
 
-The ureq 3.1.4 documentation was checked for `Agent::config_builder`, timeout
-setters, `TlsConfig`, `RootCerts::WebPki`, and `Body::as_reader`. The main agent
-must still compile-check the resolved 3.1 patch release and its transitive
-rustls/ring Android toolchain requirements. `Cargo.lock` is to be generated and
-reviewed by that build. Direct versions: ureq 3.1, serde 1, serde_json 1,
-sha2 0.10, base64 0.22, libc 0.2. `libc` supplies Android-compatible flock and
-process-group termination without requiring recent stable file-lock APIs.
+Tests cover local/cloud health separation, descriptions, boot grace, protocol
+and response limits, hash validation, cache validators and 304, unchanged
+content, native validation/acknowledgement failures, installed-byte confirmation,
+backoff/restarts, atomic state-write failures, concurrent updates, property
+preservation, private staging/cleanup, and command time/output limits. Host
+execution supplements algorithm checks but is not Android runtime acceptance.
+Real TLS outage, Binder diagnostics, native certificate rejection, watcher
+reload, SELinux and service startup need device integration verification.

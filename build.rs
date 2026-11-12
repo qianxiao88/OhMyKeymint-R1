@@ -1,4 +1,6 @@
-use std::{env, fs, path::PathBuf, process::Command, vec};
+#[cfg(feature = "local-rkp")]
+use std::env;
+use std::{fs, path::PathBuf, process::Command, vec};
 
 fn main() {
     println!("cargo:rerun-if-changed=aidl");
@@ -83,9 +85,11 @@ fn main() {
 
     fs::write(&generated_path, &patched_content).unwrap();
 
+    #[cfg(feature = "local-rkp")]
     build_rkp_v1_bridge();
 }
 
+#[cfg(feature = "local-rkp")]
 fn build_rkp_v1_bridge() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android")
         || env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("aarch64")
@@ -149,6 +153,7 @@ fn build_rkp_v1_bridge() {
     println!("cargo:rustc-env=OMK_RKP_V1_BRIDGE_JAR={}", jar.display());
 }
 
+#[cfg(feature = "local-rkp")]
 fn latest_d8(sdk: &std::path::Path) -> Option<PathBuf> {
     let mut candidates = fs::read_dir(sdk.join("build-tools"))
         .ok()?
@@ -160,6 +165,7 @@ fn latest_d8(sdk: &std::path::Path) -> Option<PathBuf> {
     candidates.pop()
 }
 
+#[cfg(feature = "local-rkp")]
 fn run_build_command(command: &mut Command) {
     let output = command.output().unwrap_or_else(|error| panic!("cannot run {command:?}: {error}"));
     assert!(

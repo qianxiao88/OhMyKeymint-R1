@@ -9,8 +9,12 @@ build = "build.rs"
 name = "inject"
 path = "src/main.rs"
 
+[features]
+default = ["soter"]
+soter = ["dep:soter-ta"]
+
 [dependencies]
-soter-ta = { path = "../soter-ta", version = "0.1.0" }
+soter-ta = { path = "../soter-ta", version = "0.1.0", optional = true }
 libc = "0.2.190"
 log = "0.4.34"
 log4rs = { version = "1.4.0", default-features = false, features = ["console_appender"] }

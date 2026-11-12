@@ -562,11 +562,42 @@ impl KeyMintWrapperInner {
         req: PerformOpReq,
         patchlevels: Option<kmr_ta::RequestPatchLevels>,
     ) -> PerformOpResponse {
+        if request_needs_attestation_ids(&req) {
+            crate::att_mgr::prepare_attestation_ids();
+        }
         let mut ta = self.keymint.lock().expect("KeyMint TA mutex poisoned");
         let response = ta.process_req_with_patchlevels(req, patchlevels);
         drop(ta);
         response
     }
+}
+
+// Discovery can take the data-operation lock; it must finish before execute()
+// takes the TA mutex. Every TA callback, including internal requests, is cache-only.
+fn request_needs_attestation_ids(request: &PerformOpReq) -> bool {
+    let params = match request {
+        PerformOpReq::DeviceGenerateKey(request) => &request.key_params,
+        PerformOpReq::DeviceImportKey(request) => &request.key_params,
+        // The wrapped key's certificate parameters are inside its encoded payload.
+        PerformOpReq::DeviceImportWrappedKey(_)
+        | PerformOpReq::RpcGenerateCertificateRequest(_)
+        | PerformOpReq::RpcGenerateCertificateV2Request(_) => return true,
+        _ => return false,
+    };
+    params.iter().any(|param| {
+        matches!(
+            param,
+            KeyParam::AttestationIdBrand(_)
+                | KeyParam::AttestationIdDevice(_)
+                | KeyParam::AttestationIdProduct(_)
+                | KeyParam::AttestationIdSerial(_)
+                | KeyParam::AttestationIdImei(_)
+                | KeyParam::AttestationIdSecondImei(_)
+                | KeyParam::AttestationIdMeid(_)
+                | KeyParam::AttestationIdManufacturer(_)
+                | KeyParam::AttestationIdModel(_)
+        )
+    })
 }
 
 impl Interface for KeyMintWrapper {}
@@ -1583,6 +1614,64 @@ fn shared_keymint_wrapper_inner(
 pub(crate) mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn attestation_id_preparation_covers_certificate_requests_without_touching_other_calls() {
+        let id_params = [
+            KeyParam::AttestationIdBrand(Vec::new()),
+            KeyParam::AttestationIdDevice(Vec::new()),
+            KeyParam::AttestationIdProduct(Vec::new()),
+            KeyParam::AttestationIdSerial(Vec::new()),
+            KeyParam::AttestationIdImei(Vec::new()),
+            KeyParam::AttestationIdSecondImei(Vec::new()),
+            KeyParam::AttestationIdMeid(Vec::new()),
+            KeyParam::AttestationIdManufacturer(Vec::new()),
+            KeyParam::AttestationIdModel(Vec::new()),
+        ];
+        for param in id_params {
+            assert!(request_needs_attestation_ids(&PerformOpReq::DeviceGenerateKey(
+                GenerateKeyRequest { key_params: vec![param.clone()], attestation_key: None }
+            )));
+            assert!(request_needs_attestation_ids(&PerformOpReq::DeviceImportKey(
+                ImportKeyRequest {
+                    key_params: vec![param],
+                    key_format: keymint::KeyFormat::Raw,
+                    key_data: Vec::new(),
+                    attestation_key: None,
+                }
+            )));
+        }
+        assert!(!request_needs_attestation_ids(&PerformOpReq::DeviceGenerateKey(
+            GenerateKeyRequest {
+                key_params: vec![KeyParam::AttestationChallenge(b"fixture".to_vec())],
+                attestation_key: None,
+            }
+        )));
+        assert!(!request_needs_attestation_ids(&PerformOpReq::DeviceEarlyBootEnded(
+            EarlyBootEndedRequest {}
+        )));
+        assert!(request_needs_attestation_ids(&PerformOpReq::DeviceImportWrappedKey(
+            ImportWrappedKeyRequest {
+                wrapped_key_data: Vec::new(),
+                wrapping_key_blob: Vec::new(),
+                masking_key: Vec::new(),
+                unwrapping_params: Vec::new(),
+                password_sid: 0,
+                biometric_sid: 0,
+            }
+        )));
+        assert!(request_needs_attestation_ids(&PerformOpReq::RpcGenerateCertificateRequest(
+            GenerateCertificateRequestRequest {
+                test_mode: false,
+                keys_to_sign: Vec::new(),
+                endpoint_encryption_cert_chain: Vec::new(),
+                challenge: Vec::new(),
+            }
+        )));
+        assert!(request_needs_attestation_ids(&PerformOpReq::RpcGenerateCertificateV2Request(
+            GenerateCertificateRequestV2Request { keys_to_sign: Vec::new(), challenge: Vec::new() }
+        )));
+    }
 
     #[test]
     fn ta_delay_categories_cover_operations_and_key_lifecycle() {

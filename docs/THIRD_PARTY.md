@@ -72,11 +72,11 @@ field contracts in
 [osm0sis/PlayIntegrityFork](https://github.com/osm0sis/PlayIntegrityFork/tree/bfad5ecb068dd8ba84af7ea6b48b8c50dbc34441),
 commit `bfad5ecb068dd8ba84af7ea6b48b8c50dbc34441` (GPL-3.0). OMK implements
 the integer field update in its existing Rust/JNI payload without copying Fork
-code. The independent Play Store Build option follows KOWX712 `v4.9-inject-s`'s
-`spoofVendingBuild` contract: it applies the complete profile string field set,
-not just the fingerprint, and does not change either SDK integer or native
-properties. No provider, signature, or Play Store SDK spoofing implementation
-is bundled.
+code. The fixed Play Store Build path follows KOWX712 `v4.9-inject-s`'s
+`spoofVendingBuild` contract: it applies the complete profile string field set
+and derived type flags without changing either SDK integer or native properties.
+OMK fixes GMS Build and native property spoofing off and Play Store Build on.
+No provider, signature, or Play Store SDK spoofing implementation is bundled.
 
 The long-property layout and legacy-reader behavior are checked against AOSP
 bionic's Android 17

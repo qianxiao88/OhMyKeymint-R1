@@ -1,6 +1,9 @@
 use super::*;
 use serde_json::json;
 
+#[path = "update_tests.rs"]
+mod update;
+
 struct TestRoot(PathBuf);
 
 impl TestRoot {
@@ -30,12 +33,18 @@ impl Drop for TestRoot {
 }
 
 fn build() -> BuildInfo {
-    BuildInfo::parse(br#"{"version":"1.3.8-301-full","hash":"0123456789abcdef","variant":"full"}"#)
+    BuildInfo::parse(br#"{"version":"1.3.8-302-full","hash":"0123456789abcdef","variant":"full"}"#)
         .unwrap()
 }
 
 fn observation(connected: bool) -> CloudObservation {
-    CloudObservation { checked_at: now(), connected, reason: "cloud stats invalid devices".into() }
+    CloudObservation {
+        checked_at: now(),
+        boot_id: current_boot_id(),
+        connected,
+        reason: "cloud stats invalid devices".into(),
+        ..CloudObservation::default()
+    }
 }
 
 fn diagnostics() -> Value {
@@ -50,7 +59,7 @@ fn diagnostics() -> Value {
 fn stats() -> Value {
     json!({
         "devices": 0, "peak": 12, "keybox_distinct": 0,
-        "product": "OhMyKeymint-R1", "version": "1.3.8-301-full",
+        "product": "OhMyKeymint-R1", "version": "1.3.8-302-full",
         "version_code": 301, "updated_at": "2026-11-10 12:00:00"
     })
 }
@@ -122,26 +131,6 @@ fn response_limits_include_exact_boundary_and_chunked_reader() {
 }
 
 #[test]
-fn keybox_comparison_is_bounded_read_only_and_byte_exact() {
-    let root = TestRoot::new();
-    let path = root.0.join("keybox.xml");
-    assert!(!keybox_unchanged(&path, b"abc"));
-    assert!(!path.exists());
-    fs::write(&path, b"abc").unwrap();
-    assert!(keybox_unchanged(&path, b"abc"));
-    assert!(!keybox_unchanged(&path, b"abd"));
-    assert!(!keybox_unchanged(&path, b"abc\n"));
-    assert!(read_file(&path, KEYBOX_LIMIT).unwrap() == b"abc");
-    let maximum = vec![b'x'; KEYBOX_LIMIT];
-    fs::write(&path, &maximum).unwrap();
-    assert!(keybox_unchanged(&path, &maximum));
-    let oversized = vec![b'x'; KEYBOX_LIMIT + 1];
-    fs::write(&path, &oversized).unwrap();
-    assert!(!keybox_unchanged(&path, &oversized));
-    assert!(!keybox_unchanged(&root.0, b"abc"));
-}
-
-#[test]
 fn keybox_hash_is_required_strict_and_case_insensitive() {
     let bytes = b"abc";
     let hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
@@ -159,9 +148,9 @@ fn keybox_hash_is_required_strict_and_case_insensitive() {
 
 #[test]
 fn build_metadata_rejects_bad_hash_version_or_variant() {
-    assert_eq!(build().version, "1.3.8-301-full");
+    assert_eq!(build().version, "1.3.8-302-full");
     assert!(BuildInfo::parse(
-        br#"{"version":"1.3.8-301-no-soter","hash":"abc1234","variant":"no-soter"}"#
+        br#"{"version":"1.3.8-302-no-soter","hash":"abc1234","variant":"no-soter"}"#
     )
     .is_ok());
     for hash in ["", "abc123", "g123456", "abc1234\n", "../../../x"] {
@@ -181,28 +170,58 @@ fn build_metadata_rejects_bad_hash_version_or_variant() {
 }
 
 #[test]
-fn success_requires_local_services_and_fresh_verified_cloud() {
+fn local_health_is_independent_from_cloud_and_update_failures() {
     let cloud = observation(true);
     let good = status(Ok(()), &cloud);
     assert!(good.ok && good.cloud_connected);
-    let text = description(&build(), DisplayState::Checked(&good));
-    assert_eq!(text, concat!(
-        "\u{2705} OMK-R1-\u{ff08}1.3.8-301-full\u{ff09}-\u{ff08}9abcdef\u{ff09}",
-        "\u{5df2}\u{6210}\u{529f}\u{8fd0}\u{884c}\u{3002}\u{5df2}\u{6210}\u{529f}\u{8fde}\u{63a5}\u{4e91}\u{7aef}\u{3002}",
-        "\u{7b49}\u{7740}\u{88ab}\u{6211}\u{683c}\u{4f60}\u{673a}\u{673a}\u{5427}\u{1f604} ",
-        "\u{3010}\u{672c}\u{6a21}\u{5757}\u{7531}\u{3010}\u{6d45}\u{7b11}\u{5450}\u{3011}\u{4e8c}\u{6539}\u{81ea}\u{7528}\u{ff0c}\u{5c5e}\u{514d}\u{8d39}\u{6a21}\u{5757}\u{ff0c}\u{5012}\u{5356}\u{53ef}\u{803b}\u{3002}\u{3011}"
-    ));
+    assert_eq!(
+        description(&build(), DisplayState::Checked(&good)),
+        "\u{2705} OMK-R1-\u{ff08}1.3.8-302-full\u{ff09}-\u{ff08}9abcdef\u{ff09}\u{5df2}\u{6210}\u{529f}\u{8fd0}\u{884c}\u{3002}\u{5df2}\u{6210}\u{529f}\u{8fde}\u{63a5}\u{4e91}\u{7aef}\u{3002}\u{7b49}\u{7740}\u{88ab}\u{6211}\u{683c}\u{4f60}\u{673a}\u{673a}\u{5427}\u{1f604} \u{3010}\u{672c}\u{6a21}\u{5757}\u{7531}\u{3010}\u{6d45}\u{7b11}\u{5450}\u{3011}\u{4e8c}\u{6539}\u{81ea}\u{7528}\u{ff0c}\u{5c5e}\u{514d}\u{8d39}\u{6a21}\u{5757}\u{ff0c}\u{5012}\u{5356}\u{53ef}\u{803b}\u{3002}\u{3011}"
+    );
     assert!(!status(Err("injector is stopped".into()), &cloud).ok);
-    assert!(!status(Err(String::new()), &cloud).ok);
-    assert!(!status(Ok(()), &observation(false)).ok);
+    assert!(!status(Err(String::new()), &cloud).reason.is_empty());
+    let offline = status(Ok(()), &observation(false));
+    assert!(offline.ok && !offline.cloud_connected && offline.reason.is_empty());
+    assert!(!offline.cloud_reason.is_empty());
     let expired =
-        CloudObservation { checked_at: now() - CLOUD_INTERVAL.as_secs(), ..observation(true) };
+        CloudObservation { checked_at: now() - CLOUD_INTERVAL.as_secs() - 1, ..observation(true) };
     assert!(!status(Ok(()), &expired).cloud_connected);
     let future = CloudObservation { checked_at: now() + 1000, ..observation(true) };
-    assert!(!status(Ok(()), &future).ok);
-    let contradictory =
-        Status { ok: true, reason: "cloud unavailable".into(), cloud_connected: false };
-    assert!(description(&build(), DisplayState::Checked(&contradictory)).starts_with('\u{274c}'));
+    assert!(status(Ok(()), &future).ok);
+    assert!(!status(Ok(()), &future).cloud_connected);
+    for state in [KeyboxUpdate::Updated, KeyboxUpdate::Unchanged, KeyboxUpdate::Failed] {
+        let failed = CloudObservation { keybox: state, ..observation(false) };
+        let checked = status(Ok(()), &failed);
+        let text = description(&build(), DisplayState::Checked(&checked));
+        assert!(checked.ok);
+        assert!(text.starts_with("\u{274c} OMK-R1 \u{8fd0}\u{884c}\u{5931}\u{8d25}\u{3002}"));
+        assert!(text.contains("cloud stats invalid devices"));
+        assert!(text.ends_with("\u{4f60}\u{5378}\u{8f7d}\u{5427}\u{3002}"));
+        assert!(!text.contains('\u{2705}'));
+    }
+}
+
+#[test]
+fn checked_descriptions_use_each_variant_version_and_only_the_last_seven_hash_characters() {
+    for variant in ["full", "no-soter", "lite"] {
+        let value = json!({"version": format!("1.3.8-302-{variant}"), "hash": "0123456789abcdef", "variant": variant});
+        let identity = BuildInfo::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let good = status(Ok(()), &observation(true));
+        let text = description(&identity, DisplayState::Checked(&good));
+        assert!(text.starts_with(&format!(
+            "\u{2705} OMK-R1-\u{ff08}1.3.8-302-{variant}\u{ff09}-\u{ff08}9abcdef\u{ff09}"
+        )));
+        assert!(!text.contains("012345678"));
+        assert!(!text.chars().any(char::is_control));
+        let pending = status(Ok(()), &CloudObservation::default());
+        let pending_text = description(&identity, DisplayState::Checked(&pending));
+        assert!(pending.ok && !pending.cloud_connected);
+        assert!(pending_text.contains("cloud check pending"));
+        assert_eq!(pending.phase, "checking");
+        assert_eq!(pending.cloud_phase, "pending");
+        assert!(!pending_text.contains('\u{2705}'));
+        assert!(!pending_text.contains('\u{274c}'));
+    }
 }
 
 #[test]
@@ -223,6 +242,11 @@ fn failure_reason_is_specific_and_single_line() {
         &description(&build(), DisplayState::Checked(&checked)),
     );
     assert!(prop.ends_with("\u{ff09}\u{4f60}\u{5378}\u{8f7d}\u{5427}\u{3002}\n"));
+    let both_failed = status(Err("keymint is stopped".into()), &observation(false));
+    let text = description(&build(), DisplayState::Checked(&both_failed));
+    assert!(text.contains("keymint is stopped"));
+    assert!(text.contains("cloud stats invalid devices"));
+    assert!(!text.contains('\u{2705}'));
 }
 
 #[test]
@@ -233,9 +257,72 @@ fn waiting_is_distinct_and_grace_expires_at_120_seconds() {
     assert!(!startup_wait(&failed, Duration::from_secs(120)));
     assert!(!startup_wait(&Ok(()), Duration::ZERO));
     let text = description(&build(), DisplayState::Waiting("waiting\nfor boot"));
-    assert!(text.starts_with("OMK-R1 "));
+    assert!(text.starts_with("OMK-R1-"));
     assert!(!text.contains('\u{2705}') && !text.contains('\u{274c}'));
     assert!(text.ends_with("waiting for boot"));
+}
+
+#[test]
+fn transient_runtime_health_failure_is_confirmed_before_reporting() {
+    let mut samples = vec![Err("keystore restarting".into()), Ok(())].into_iter();
+    let pauses = std::cell::Cell::new(0);
+    assert!(
+        confirm_local_health(|| samples.next().unwrap(), || pauses.set(pauses.get() + 1)).is_ok()
+    );
+    assert_eq!(pauses.get(), 1);
+    let mut samples =
+        vec![Err("first sample".into()), Err("injector not mapped".into())].into_iter();
+    assert_eq!(
+        confirm_local_health(|| samples.next().unwrap(), || {}),
+        Err("injector not mapped".into())
+    );
+    let mut calls = 0;
+    assert!(confirm_local_health(
+        || {
+            calls += 1;
+            Ok(())
+        },
+        || panic!("healthy sample must not pause")
+    )
+    .is_ok());
+    assert_eq!(calls, 1);
+}
+
+#[test]
+fn health_stability_handles_startup_restart_persistent_failure_and_recovery() {
+    let mut health = HealthStability::default();
+    let failure = Err("injection pending".into());
+    assert!(health.checking(&failure, Duration::ZERO));
+    assert!(health.checking(&failure, Duration::from_secs(119)));
+    assert!(!health.checking(&failure, Duration::from_secs(120)));
+    assert!(!health.checking(&Ok(()), Duration::from_secs(130)));
+    assert!(health.checking(&failure, Duration::from_secs(190)));
+    assert!(health.checking(&failure, Duration::from_secs(219)));
+    assert!(!health.checking(&failure, Duration::from_secs(220)));
+    assert!(!health.checking(&Ok(()), Duration::from_secs(230)));
+    assert!(health.checking(&failure, Duration::from_secs(240)));
+}
+
+#[test]
+fn cloud_connection_requires_current_boot_and_bounded_observation_age() {
+    let cloud = CloudObservation {
+        checked_at: 1000,
+        boot_id: Some("boot-a".into()),
+        connected: true,
+        ..CloudObservation::default()
+    };
+    assert!(cloud.fresh_at(1000, Some("boot-a")));
+    assert!(cloud.fresh_at(1000 + CLOUD_INTERVAL.as_secs(), Some("boot-a")));
+    assert!(!cloud.fresh_at(1001 + CLOUD_INTERVAL.as_secs(), Some("boot-a")));
+    assert!(!cloud.fresh_at(999, Some("boot-a")));
+    assert!(!cloud.fresh_at(1000, Some("boot-b")));
+    assert!(!cloud.fresh_at(1000, None));
+    let old = CloudObservation { boot_id: None, ..cloud };
+    assert!(!old.fresh_at(1000, Some("boot-a")));
+    let checked = status(Ok(()), &old);
+    assert!(!checked.cloud_connected);
+    assert_eq!(checked.phase, "checking");
+    assert!(!description(&build(), DisplayState::Checked(&checked)).starts_with('\u{274c}'));
 }
 
 #[test]
@@ -268,6 +355,25 @@ fn atomic_description_update_preserves_mode_and_is_idempotent() {
     assert_eq!(fs::read(&prop).unwrap(), first);
     assert!(String::from_utf8(first).unwrap().contains("author=packager\n"));
     assert_eq!(fs::read_dir(&paths.module).unwrap().count(), 1);
+    let good = status(Ok(()), &observation(true));
+    update_description(&paths, &build(), DisplayState::Checked(&good)).unwrap();
+    assert_eq!(
+        fs::read_to_string(&prop).unwrap(),
+        format!(
+            "id=omk\nauthor=packager\ndescription={}\n",
+            description(&build(), DisplayState::Checked(&good))
+        )
+    );
+    let failed = status(Err("injector is stopped".into()), &observation(true));
+    update_description(&paths, &build(), DisplayState::Checked(&failed)).unwrap();
+    assert_eq!(
+        fs::read_to_string(&prop).unwrap(),
+        format!(
+            "id=omk\nauthor=packager\ndescription={}\n",
+            description(&build(), DisplayState::Checked(&failed))
+        )
+    );
+    assert_eq!(fs::metadata(&prop).unwrap().permissions().mode() & 0o7777, 0o640);
 }
 
 #[test]
@@ -311,16 +417,16 @@ fn file_lock_is_exclusive_released_and_not_unlinked() {
 fn cloud_cache_is_private_and_stale_or_corrupt_data_fails_closed() {
     let root = TestRoot::new();
     let paths = root.paths();
-    assert!(!CloudObservation::load(&paths).connected);
+    assert!(!status(Ok(()), &CloudObservation::load(&paths)).cloud_connected);
     observation(true).save(&paths).unwrap();
     assert!(CloudObservation::load(&paths).connected);
     let path = paths.data.join("cloud.json");
     assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     let expired = CloudObservation { checked_at: 0, ..observation(true) };
     expired.save(&paths).unwrap();
-    assert!(!CloudObservation::load(&paths).connected);
+    assert!(!status(Ok(()), &CloudObservation::load(&paths)).cloud_connected);
     fs::write(&path, b"bad json").unwrap();
-    assert!(!CloudObservation::load(&paths).connected);
+    assert!(!status(Ok(()), &CloudObservation::load(&paths)).cloud_connected);
 }
 
 #[test]

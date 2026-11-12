@@ -1,7 +1,6 @@
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::{net::UnixStream, process::CommandExt},
-    path::Path,
+    os::unix::{fs::PermissionsExt, net::UnixStream, process::CommandExt},
     process::Command,
     sync::{Mutex, OnceLock},
 };
@@ -81,9 +80,6 @@ const RESETPROP_FALLBACKS: &[(&str, Option<&str>)] = &[
     ("/data/adb/ap/bin/resetprop", None),
     ("/data/adb/ksud", Some("resetprop")),
     ("/data/adb/apd", Some("resetprop")),
-    // System locations are only a last-resort fallback.
-    ("/system_ext/bin/resetprop", None),
-    ("/system/bin/resetprop", None),
 ];
 
 #[derive(Clone)]
@@ -390,25 +386,53 @@ where
 }
 
 pub fn find_resetprop_command() -> Result<ResetpropCommand> {
-    if let Some(program) = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|directory| directory.join("resetprop"))
-            .find(|candidate| candidate.exists())
-            .map(|candidate| candidate.to_string_lossy().into_owned())
-    }) {
-        return Ok(ResetpropCommand { program, prepend_arg: None });
-    }
-
-    for (program, prepend_arg) in RESETPROP_FALLBACKS {
-        if Path::new(program).exists() {
-            return Ok(ResetpropCommand {
-                program: program.to_string(),
-                prepend_arg: prepend_arg.map(str::to_string),
+    let mut candidates: Vec<_> = RESETPROP_FALLBACKS
+        .iter()
+        .map(|(program, prepend_arg)| ResetpropCommand {
+            program: program.to_string(),
+            prepend_arg: prepend_arg.map(str::to_string),
+        })
+        .collect();
+    if let Some(path) = std::env::var_os("PATH") {
+        // Root managers supply their tools through PATH. This also lets a
+        // native loader provide an actual executable without invented paths.
+        for directory in std::env::split_paths(&path) {
+            candidates.push(ResetpropCommand {
+                program: directory.join("resetprop").to_string_lossy().into_owned(),
+                prepend_arg: None,
             });
         }
     }
+    for program in ["/system_ext/bin/resetprop", "/system/bin/resetprop"] {
+        candidates.push(ResetpropCommand { program: program.to_string(), prepend_arg: None });
+    }
+    for command in candidates {
+        let executable = std::fs::metadata(&command.program)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0);
+        if executable && resetprop_can_read(&command) {
+            return Ok(command);
+        }
+    }
+    Err(anyhow!("no executable resetprop with the required -n interface found"))
+}
 
-    Err(anyhow!("no usable resetprop binary found"))
+fn resetprop_can_read(command: &ResetpropCommand) -> bool {
+    let property = "ro.build.version.sdk";
+    let Some(expected) = read_string_property(property) else {
+        return false;
+    };
+    let mut process = Command::new(&command.program);
+    process.uid(kmr_common::consts::AID_ROOT);
+    if let Some(prepend_arg) = &command.prepend_arg {
+        process.arg(prepend_arg);
+    }
+    process.args(["-n", property]);
+    match process.output() {
+        Ok(output) => {
+            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == expected
+        }
+        Err(_) => false,
+    }
 }
 
 fn property_write_command(command: &ResetpropCommand, property: &str, value: &str) -> Command {
@@ -730,6 +754,7 @@ fn helper_loop(stream: UnixStream, command: Option<ResetpropCommand>) -> Result<
 // The child binds its lifetime to this helper and is retried after an exit.
 fn start_auto_targets_monitor() {
     start_injector_monitor("--auto-targets-watch", "omk-app-monitor");
+    #[cfg(feature = "soter")]
     start_injector_monitor("--soter-watch", "omk-soter-monitor");
 }
 

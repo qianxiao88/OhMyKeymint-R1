@@ -118,55 +118,53 @@ reapply_security_patch_early() (
   esac
   PATCH_DATE=$1
 
-  RESETPROP_MODE=direct
+  GETPROP_BIN=/system/bin/getprop
+  [ -x "$GETPROP_BIN" ] || GETPROP_BIN=$(command -v getprop 2>/dev/null)
+  [ -n "$GETPROP_BIN" ] || return 0
   RESETPROP_BIN=
-  for candidate in \
-    /data/adb/ksu/bin/resetprop \
-    /data/adb/magisk/resetprop \
+  RESETPROP_PREFIX=
+  probe_resetprop() {
+    candidate=$1
+    prefix=$2
+    [ -x "$candidate" ] || return 1
+    expected=$("$GETPROP_BIN" ro.build.version.sdk 2>/dev/null)
+    [ -n "$expected" ] || return 1
+    if [ -n "$prefix" ]; then
+      actual=$("$candidate" "$prefix" -n ro.build.version.sdk 2>/dev/null) || return 1
+    else
+      actual=$("$candidate" -n ro.build.version.sdk 2>/dev/null) || return 1
+    fi
+    [ "$actual" = "$expected" ] || return 1
+    RESETPROP_BIN=$candidate
+    RESETPROP_PREFIX=$prefix
+  }
+  for candidate in /data/adb/ksu/bin/resetprop /data/adb/magisk/resetprop \
     /data/adb/ap/bin/resetprop
   do
-    if [ -x "$candidate" ]; then
-      RESETPROP_BIN=$candidate
-      break
-    fi
+    probe_resetprop "$candidate" "" && break
   done
-  if [ -z "$RESETPROP_BIN" ] && [ -x /data/adb/ksud ]; then
-    RESETPROP_BIN=/data/adb/ksud
-    RESETPROP_MODE=ksud
-  elif [ -z "$RESETPROP_BIN" ] && [ -x /data/adb/apd ]; then
-    RESETPROP_BIN=/data/adb/apd
-    RESETPROP_MODE=apd
+  if [ -z "$RESETPROP_BIN" ]; then
+    probe_resetprop /data/adb/ksud resetprop || probe_resetprop /data/adb/apd resetprop || true
   fi
   if [ -z "$RESETPROP_BIN" ]; then
-    RESETPROP_BIN=$(command -v resetprop 2>/dev/null)
+    candidate=$(command -v resetprop 2>/dev/null)
+    [ -z "$candidate" ] || probe_resetprop "$candidate" ""
   fi
   if [ -z "$RESETPROP_BIN" ]; then
     for candidate in /system_ext/bin/resetprop /system/bin/resetprop; do
-      if [ -x "$candidate" ]; then
-        RESETPROP_BIN=$candidate
-        break
-      fi
+      probe_resetprop "$candidate" "" && break
     done
   fi
   [ -n "$RESETPROP_BIN" ] || return 0
-
-  if [ "$RESETPROP_MODE" = ksud ]; then
-    "$RESETPROP_BIN" resetprop -n ro.vendor.build.security_patch "$PATCH_DATE" \
-      >/dev/null 2>&1
-    "$RESETPROP_BIN" resetprop -n ro.build.version.security_patch "$PATCH_DATE" \
-      >/dev/null 2>&1
-  elif [ "$RESETPROP_MODE" = apd ]; then
-    "$RESETPROP_BIN" resetprop -n ro.vendor.build.security_patch "$PATCH_DATE" \
-      >/dev/null 2>&1
-    "$RESETPROP_BIN" resetprop -n ro.build.version.security_patch "$PATCH_DATE" \
-      >/dev/null 2>&1
-  else
-    "$RESETPROP_BIN" -n ro.vendor.build.security_patch "$PATCH_DATE" >/dev/null 2>&1
-    "$RESETPROP_BIN" -n ro.build.version.security_patch "$PATCH_DATE" >/dev/null 2>&1
-  fi
-
-  GETPROP_BIN=/system/bin/getprop
-  [ -x "$GETPROP_BIN" ] || GETPROP_BIN=$(command -v getprop 2>/dev/null)
+  reset_patch_prop() {
+    if [ -n "$RESETPROP_PREFIX" ]; then
+      "$RESETPROP_BIN" "$RESETPROP_PREFIX" -n "$@"
+    else
+      "$RESETPROP_BIN" -n "$@"
+    fi
+  }
+  reset_patch_prop ro.vendor.build.security_patch "$PATCH_DATE" >/dev/null 2>&1
+  reset_patch_prop ro.build.version.security_patch "$PATCH_DATE" >/dev/null 2>&1
   if [ -n "$GETPROP_BIN" ]; then
     CURRENT_VENDOR=$("$GETPROP_BIN" ro.vendor.build.security_patch 2>/dev/null)
     CURRENT_SYSTEM=$("$GETPROP_BIN" ro.build.version.security_patch 2>/dev/null)

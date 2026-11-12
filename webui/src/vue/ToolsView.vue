@@ -153,11 +153,10 @@ const feedbackRow: ToolRow = { key: 'feedback', event: 'feedback', icon: Info, t
 const wallpaperRow: ToolRow = { key: 'wallpaper', event: 'wallpaper', icon: Photos, title: '背景壁纸', summary: '' }
 const liteRows = computed<ToolRow[]>(() => [
   cloudRow,
-  { key: 'patch', sheet: 'patch', icon: Update, title: '安全补丁', summary: props.securityPatch ?? '' },
-  { key: 'gms', event: 'clearGmsCache', icon: Reset, title: 'GMS 缓存清理', summary: '' },
-  { key: 'targets', event: 'openAppTargets', icon: AddCircle, title: '包名添加', summary: '' },
+  { key: 'patch', sheet: 'patch', icon: Update, title: '安全补丁', summary: props.securityPatch ?? '同步或恢复安全补丁日期' },
+  { key: 'gms', event: 'clearGmsCache', icon: Reset, title: 'GMS 缓存清理', summary: '清理 Play 服务与 Play 商店缓存' },
+  { key: 'targets', event: 'openAppTargets', icon: AddCircle, title: '包名添加', summary: '选择使用核心 KeyMint 的应用' },
   wallpaperRow,
-  feedbackRow,
 ])
 
 const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => IS_LITE ? [

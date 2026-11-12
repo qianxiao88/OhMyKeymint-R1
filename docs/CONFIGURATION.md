@@ -293,7 +293,13 @@ hardware-backed operation. A vendor KeyMint process is not used as evidence
 that OMK itself is running. The current-device-status card shows service state
 only, without Keybox certificate-chain details or a separate inspector request.
 A diagnostic read failure is reported in the UI and does not change runtime
-routing.
+routing. The lightweight `--webui-get-runtime-health` helper reads only deployed
+process identity and the injector's executable mapping in the active keystore2
+process. A supervisor alone is configured, not running; unreadable process maps
+are unknown. This lightweight check does not initialize Binder or query hardware
+and does not establish that an injected RPC session is responsive. The R1 helper
+uses bounded rechecks, startup/restart grace and current-boot cloud observations
+for the module description; cloud verification pending is distinct from failure.
 
 The injector daemon waits for keystore2 to appear and retries injection after
 startup or a process restart. If keystore2 disappears before launcher discovery,
@@ -314,29 +320,30 @@ that level's year and month. When the saved default
 `ro.build.version.security_patch` has day `01`, the synchronized date also has
 day `01`; otherwise it keeps the published Google date. The saved system date
 is authoritative if it differs from the saved vendor date. The action updates
-the four `[trust]` patch-level fields and uses `resetprop -n` to set both
-`ro.build.version.security_patch` and `ro.vendor.build.security_patch` to that
-date without going through Android's property service or triggering its change
-actions. The same `-n` mode applies to restore, rollback, and startup writes;
-unrelated property writes keep their existing behavior. Before the first sync,
-the native helper saves the current values of both
-properties to
-`/data/misc/keystore/omk/data/security_patch_defaults.toml`. A later sync keeps
-the existing snapshot instead of replacing the saved defaults.
+the four `[trust]` patch-level fields and uses `resetprop -n` to align
+`ro.build.version.security_patch` and `ro.vendor.build.security_patch`. These
+are runtime properties; no boot property, image, or partition is written.
+Writes bypass Android's property service and its change actions. The same mode
+applies to restore, rollback, and startup replay. Before changing values, the
+native helper atomically saves original system/vendor dates and build
+fingerprint in the version-1 snapshot at
+`/data/misc/keystore/omk/data/security_patch_defaults.toml`. Repeated syncs retain
+same-build originals; an OTA refreshes the snapshot from build properties.
 
 The action uses the module's native HTTPS client with embedded WebPKI roots;
 the device does not need to provide `curl` or `wget`. HTTPS redirects are
 accepted only when the final URL remains the official bulletin page. A failed
 request, unrecognized page, invalid date, or snapshot write leaves the
-configuration and properties unchanged. The native helper verifies both
-property writes and rolls them back when the paired update or subsequent
-configuration write fails. **Restore default security patch** makes no network
-request. It first restores both properties from the snapshot, then sets
-`security_patch`, `os_patchlevel`, `vendor_patchlevel`, and `boot_patchlevel` to
-`"auto"`. It deletes the snapshot only after both property restores and the
-configuration update succeed; a failed restore retains it for another attempt.
-The two properties are global Android runtime state for the current boot, so
-every process that reads them can observe the synchronized or restored values.
+configuration and properties unchanged. The native helper verifies the pair
+and rolls it back when a write or subsequent configuration save fails.
+**Restore default security patch** makes no network request. It restores the
+original system/vendor values, sets `security_patch`, `os_patchlevel`,
+`vendor_patchlevel`, and `boot_patchlevel` to `"auto"`, then removes the snapshot.
+The properties are global Android runtime state for the current boot.
+Startup replays an override only when a snapshot exists and all four trust
+fields contain the same exact date. An all-auto startup leaves dates and
+configuration unchanged. KeyMint startup repeats the saved pair replay before
+resolving trust; a replay failure is logged and regular startup continues.
 
 When Oh My Keymint is uninstalled from KernelSU, the bundled uninstaller removes
 exactly `/data/adb/omk` and `/data/misc/keystore/omk`. This includes the active
@@ -349,32 +356,20 @@ downloads a Pixel device list from
 `bot/device_prop/<product>.prop`. The upstream bot refreshes these records
 daily from Google's Android preview pages, Android Flash Tool Canary metadata,
 and Pixel security bulletin. The helper first tries the exact GitHub Raw path
-and then the exact jsDelivr path. It does not run the upstream Autopif shell
-script and does not require a device-provided `curl`, `wget`, or shell download
-tool.
+and then the exact jsDelivr path for the same repository, branch, and resource.
+It uses OMK's native HTTPS client with certificate validation, exact-resource
+redirects, bounded downloads and parsing. It does not run the upstream Autopif
+shell script or require a device-provided `curl`, `wget`, or shell download tool.
 
-The native helper accepts only the fixed feed paths, validates every catalog
-entry, requires `FINGERPRINT`, `MANUFACTURER`, `MODEL`, and `SECURITY_PATCH`
-in a profile, and accepts optional `DEVICE_INITIAL_SDK_INT` launch-SDK metadata
-as a positive 32-bit decimal integer. Unknown keys, duplicate keys, and missing
-required fields are rejected. The launch-SDK metadata is retained in the profile;
-when absent, the product's initial API level defaults to `32`, following
-PlayIntegrityFix `v4.9-inject-s`. Native property spoofing uses that value for
-`ro.product.first_api_level` and `32` for `ro.board.first_api_level`, without
-overriding other API-level properties. GMS Build spoofing writes the same
-launch-SDK value to the integer `Build.VERSION.DEVICE_INITIAL_SDK_INT` field.
-It does not change `Build.VERSION.SDK_INT`.
-When Java Build spoofing is enabled, `Build.IS_ENG`, `Build.IS_USERDEBUG`,
-and `Build.IS_USER` are synchronized with the selected `Build.TYPE`. All
-written strings, type flags, and the GMS launch SDK are read back before the
-payload reports a verified Java update. A failed JNI operation is logged and
-its pending exception is cleared; an exception already pending before the
-update is preserved and the update is skipped. Java writes are sequential;
-on failure, fields already written remain applied and the payload does not
-report a verified update.
+The native helper accepts only the fixed feed paths and validates every catalog
+entry. A selected profile must match the catalog's model and product, describe a
+Google user/release-keys identity, and provide `FINGERPRINT`, `MANUFACTURER`,
+`MODEL`, and `SECURITY_PATCH`. Optional `DEVICE_INITIAL_SDK_INT` launch-SDK
+metadata must be a positive 32-bit decimal integer and defaults to `32` when
+absent. Unknown keys, duplicate keys, and missing required fields are rejected.
 The helper splits the fingerprint into its eight Build components. It stores
-the following values in canonical JSON only after they agree
-with one another and satisfy TrickyStore's value limits:
+the following values in canonical JSON only after they agree with one another
+and satisfy the 126-byte value limit:
 
 ```text
 MANUFACTURER=Google
@@ -393,65 +388,49 @@ SECURITY_PATCH=YYYY-MM-DD
 
 The complete candidate is atomically stored at
 `/data/misc/keystore/omk/data/pif_fingerprint.json`; an invalid download or
-failed write leaves the previous profile unchanged. The WebUI controls Java
-Build spoofing and native property spoofing independently for Google Play
-services through **Spoof Build** and **Spoof Props**; both default to on.
-A separate **Spoof Build (Play Store)** switch defaults to off and applies all
-12 string fields listed above and the three derived type flags inside the Play
-Store, including model, product, device, fingerprint, release, build ID, and
-security patch. It does not change the store's launch SDK, running SDK, or
-native properties, and is independent
-of the two GMS switches. All three switches can be enabled together.
-Changes take effect only after Apply succeeds. Turning off the main switch
-removes the profile. The profile uses schema version 2; canonical version-1
-profiles remain readable without a rewrite and default to both paths enabled.
-The optional `spoof_vending_build` boolean defaults to false and is omitted
-from canonical JSON when false. Profiles without this option leave Play Store
-spoofing disabled.
-Version-2 profiles require the matching Zygisk payload; reboot after installing
-an updated module before applying the new options.
-This state file is not part of either OMK TOML schema. OMK packages its own
-Zygisk library, which reads
-the validated profile through its root companion when a new
-`com.google.android.gms.unstable` or `com.android.vending` process (including a
-named `:...` child process) is specialized by the Zygisk Next loader. During
-pre-app specialization, when native spoofing is enabled for GMS, the payload warms up
-bionic's lazily opened property areas before inspecting their mappings. It
-attempts validated process-private property-area replacement; shared property
-files and other processes are not modified. Read-only values of 92 bytes or
-more use bionic's long-property layout within the existing profile limit of
-126 bytes. Storage is reused or allocated within the private mapping, retaining
-property addresses. Installation verifies full callback values, names, serial
-metadata, legacy API results, and mapping identity. Legacy APIs with a 92-byte
-buffer return bionic's standard long-property message; callers must use
-`__system_property_read_callback` to obtain the complete value. The hook
-fallback uses the same legacy representation and resolves the full property
-name even when the legacy caller omits its name buffer or receives a truncated
-name. The fallback preserves bionic's serial change token; only the private-area
-path changes the stored property metadata. If the private mapping lacks
-space, has an unsupported layout, or fails installation or readback, the payload
-restores any replaced mappings and uses the existing property hooks.
-On AArch64 the callback hook is attempted only after validating the wrapper
-semantics, memory mappings, and BTI/MTE permissions. A rejected
-callback hook leaves libc unchanged, records the reason, and continues with
-the available PLT and Java paths. After specialization the payload updates Java
-`Build` fields and the integer launch SDK only when GMS Build spoofing is enabled,
-and probes 14 core identity and launch-API properties through the callback API
-when GMS native spoofing is enabled, logging mismatches and missing properties.
-Store processes are separated before native hook installation and receive
-only the optional Java Build strings and derived type flags. A process with
-no enabled spoofing path unloads the PIF library. OMK retains its own Google-process scope and
-does not include upstream provider/signature spoofing or ADB/USB overrides.
-The WebUI shows the selected fingerprint, patch date, initial API level, and
-saved options. Its desktop development preview uses labelled in-memory sample
-data, not Android state or a Play Integrity result. Zygisk Next must already be
-installed and enabled by the user; OMK does
-not bundle, install, or implement that loader. The helper ends both target
-process families after a successful change so a later process receives the
-selected values. Disabling spoofing removes the profile and repeats the same
-process refresh. The spoof is process-local: it does not call `resetprop`,
-change global Android properties, or change values under OMK's `[device]`
-section.
+failed write leaves the previous profile unchanged. PIF is fixed to Play Store
+Build only: `spoof_build=false`, `spoof_props=false`, and
+`spoof_vending_build=true`. Legacy CLI option values do not change that scope.
+The WebUI presents one main switch, the Pixel device list with a Random choice,
+and the current configuration. Current configuration shows the model,
+fingerprint, patch date, and initial API level. Changes take effect only after
+Apply succeeds. Turning off the main switch removes the profile.
+
+The active profile uses schema version 2. The reader accepts canonical wire
+versions 1 and 2, verifies their original schema, identity, and canonical bytes,
+then normalizes the in-memory profile to version 2 and the fixed Store-only
+flags. Reading does not rewrite the saved file. Other versions and unknown
+fields are rejected. This state file is separate from both OMK TOML schemas.
+Reboot after installing an updated module so its matching Zygisk payload is
+loaded before applying a profile.
+
+OMK packages its own Zygisk library, which reads the validated profile through
+its root companion when a target process is specialized by Zygisk Next. Only
+`com.android.vending` and its named `:...` children receive the 12 Java string
+fields listed above and the three type flags `Build.IS_ENG`,
+`Build.IS_USERDEBUG`, and `Build.IS_USER`, derived from `Build.TYPE`. This
+includes the selected profile's release, build ID, and security patch. The
+Play Store's launch SDK, running SDK, and native properties remain unchanged.
+The initial API level is retained as profile metadata and displayed in the UI.
+GMS Build and native property spoofing are disabled; a GMS process unloads the
+PIF library without applying either path.
+
+All written Java strings and type flags are read back before the payload
+reports a verified update. A failed JNI operation is logged and its pending
+exception is cleared; an exception already pending before the update is
+preserved and the update is skipped. Java writes are sequential; on failure,
+fields already written remain applied and the payload does not report a
+verified update. OMK does not include upstream provider/signature spoofing or
+ADB/USB overrides.
+
+The desktop development preview uses labelled in-memory sample data, not
+Android state or a Play Integrity result. Zygisk Next must already be installed
+and enabled by the user; OMK does not bundle, install, or implement that loader.
+The helper ends the Google Play services unstable and Play Store process
+families after a successful change so later processes receive the selected
+state. Disabling spoofing removes the profile and repeats the same process
+refresh. The spoof is process-local: it does not call `resetprop`, change global
+Android properties, or change values under OMK's `[device]` section.
 
 All other WebUI assets are bundled and no network request is made for normal
 local operations. None of the WebUI network paths requires a device-provided
@@ -779,40 +758,35 @@ unrelated configuration values. After a successful sync or restore, the WebUI
 shows a completion message asking you to reboot the device; it does not reboot
 automatically.
 
-Before changing runtime properties for the first sync, the helper atomically
-saves both default properties to
-`/data/misc/keystore/omk/data/security_patch_defaults.toml`. When all four
-`[trust]` patch-level fields are `auto`, those defaults are read from the
-current runtime properties; for an explicit date or a mixed configuration, they
-are read from the trusted `build.prop` sources. An existing valid snapshot for
-the same build fingerprint is retained across repeated syncs. The helper then
-sets both properties to the selected date with `resetprop -n` and verifies the
-results. After that, it writes the date to `security_patch`, `os_patchlevel`,
-`vendor_patchlevel`, and `boot_patchlevel`. These are global Android properties
-for the current boot, not values visible only to OMK.
+Before changing runtime properties, the helper atomically saves the original
+system/vendor pair and build fingerprint to the version-1 snapshot at
+`/data/misc/keystore/omk/data/security_patch_defaults.toml`. Original values come
+from runtime properties for an all-auto configuration, or from trusted build
+properties when an override is already active. Same-build originals survive
+repeated syncs; an OTA refreshes them from build properties. The reader can
+extract the original pair from an existing version-2 file without applying its
+extra fields or rewriting the file. Newly saved snapshots use version 1.
+The helper writes and verifies the pair using `resetprop -n`, then writes the
+same date to all four `[trust]` patch-level fields. These are global runtime
+properties, not values visible only to OMK. No boot property or partition is
+written.
 
-While a valid defaults snapshot exists and all four configuration fields still
-contain the same exact date, the module's early boot hook reapplies that date to
-both properties before Android framework values are cached. Keymint also
-reapplies the pair at startup. The snapshot is the persistent marker for a
-WebUI synchronization: a manually authored exact-date configuration without a
-snapshot follows the normal patch-level path and does not cause an extra
-vendor-property write. If the optional snapshot cannot be read or validated,
-both paths skip this paired reapply and keymint continues its normal
-initialization.
+Startup replay requires an existing snapshot and four equal exact trust dates.
+The early boot hook replays a version-1 snapshot before the framework caches
+its security-patch value. KeyMint startup repeats the pair replay before
+resolving trust and refreshes saved defaults on a build-fingerprint change.
+All-auto startup and an explicit uniform date without a snapshot do not create
+saved state or synchronize the pair. A replay error is logged and regular
+startup continues.
 
-The WebUI **Restore default security patch** action uses the saved snapshot and
-does not access the network. If the snapshot is absent, the helper records the
-current runtime properties as the restore values. It restores both properties
-first, writes `"auto"` to `security_patch`, `os_patchlevel`,
-`vendor_patchlevel`, and `boot_patchlevel`, and deletes the snapshot only when
-every step succeeds. It preserves every other configuration value. A malformed
-or unverifiable snapshot stops the operation before either property or the
-configuration changes. A failed paired property update is rolled back. If the
-configuration write fails, the helper attempts to roll back both properties;
-any incomplete restore retains the snapshot so the action can be retried. The
-helper serializes these actions with startup and live configuration reloads so
-an older pending reload cannot overwrite a completed restore.
+**Restore default security patch** restores the saved system/vendor dates,
+writes `"auto"` to all four trust fields, and removes the snapshot. The operation
+preserves unrelated settings. Invalid snapshots stop the operation before
+changing properties or configuration. Write failures roll back the pair and
+retain its state for retry. Startup, manual actions and live reload share a
+lock. The automatic boot trust value takes effect after KeyMint restarts.
+See [Security patch dates](SECURITY_PATCH_DATES.md) for property and recovery
+details.
 
 `"auto"` first uses a nonempty runtime property, then the exact key from the
 standard `build.prop` locations, and finally `2025-06-05` if neither source is

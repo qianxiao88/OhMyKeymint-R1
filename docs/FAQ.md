@@ -179,8 +179,8 @@ The **Security Level** row is read from the active Keybox certificate and shows
 either level.
 Continue to manage those settings through the documented active files.
 
-**Spoof PIF fingerprint** is the other network-backed action. PIF uses only the
-documented Pixel profile feed described below.
+**Spoof PIF fingerprint** is another network-backed action. It uses the fixed
+Pixel `bot` feed paths described below.
 
 ### What happens when the WebUI saves the app list?
 
@@ -306,56 +306,53 @@ routing boundary.
 It stores a validated Pixel profile at
 `/data/misc/keystore/omk/data/pif_fingerprint.json`. The selected profile is
 downloaded through OMK's native HTTPS client, validated, and expanded into
-matching Android Build fields. OMK's own Zygisk payload reads that profile
-when the target process starts through the Zygisk Next loader. Zygisk Next must
-be installed and active by the user; OMK does not bundle, install, or implement
-that loader.
+matching Android Build fields. The fixed source is the `bot` branch of
+`KOWX712/PlayIntegrityFix`: `device_list.json` supplies the catalog and
+`device_prop/<product>.prop` supplies the selected profile. The helper tries
+GitHub Raw first and jsDelivr second for the same exact resource. HTTPS
+redirects stay within the fixed feed paths, and a failed download, catalog
+mismatch, or invalid profile leaves the saved profile unchanged.
 
-OMK applies these fields while starting `com.google.android.gms.unstable`,
-including its named `:...` child processes. During
-pre-app specialization, native spoofing first attempts validated process-private
-property areas, warming up bionic's lazy mappings before inspection. If this
-cannot be installed safely, the payload restores replaced mappings and uses
-its available PLT hooks and validated AArch64 callback hook. The callback path
-checks wrapper semantics, memory mappings, and BTI/MTE permissions before
-patching libc. After specialization the payload updates Java `Build` fields.
-Build and native property spoofing have independent WebUI switches, both on
-by default, and are saved with Apply. The selected profile's initial API level
-is preserved, defaulting to `32` when absent. The Build path writes it to
-`Build.VERSION.DEVICE_INITIAL_SDK_INT`, and the native path uses the same value
-for `ro.product.first_api_level`. The running `Build.VERSION.SDK_INT` is not
-changed, and other API-level properties are not broadly rewritten.
+The panel has one main switch, a Pixel device list with a Random choice, and
+the current configuration. Apply saves the selection. PIF always uses
+`spoof_build=false`, `spoof_props=false`, and `spoof_vending_build=true`;
+GMS Build and native property spoofing stay disabled.
 
-The independent **Spoof Build (Play Store)** option defaults to off. When enabled,
-it changes all 12 profile string fields in `com.android.vending` and its named
-`:...` children: manufacturer, model, fingerprint, brand, product, device,
-release, build ID, incremental version, type, tags, and security patch. It does
-not change their launch SDK, running SDK, or native properties, even when either
-GMS option is enabled. This option does not require either GMS option to be
-enabled, and all three can be enabled together. Configurations without the
-option keep it disabled.
-The helper ends both
-process families after a successful change so a new
-process can read the file. This action does not change global system
-properties, OMK's attested device identity, or the security-patch
-synchronization setting.
-Installing or updating OMK's Zygisk payload, or enabling Zygisk Next for the
-first time, still requires a device reboot. Turning the WebUI switch off
-removes the profile and refreshes the same process families so their next
-instances return to the device's original values.
+OMK's own Zygisk payload applies the profile only to `com.android.vending`
+and its named `:...` children. It updates the 12 Java string fields:
+manufacturer, model, fingerprint, brand, product, device, release, build ID,
+incremental version, type, tags, and security patch. The three `Build.TYPE`
+flags are synchronized with the selected build type. The Play Store's launch
+SDK, running SDK, and native properties remain unchanged. The selected
+profile's initial API level is retained as metadata, defaults to `32` when
+absent, and appears in the current configuration. GMS processes receive no
+Build or property changes.
 
-The PIF fingerprint integration uses the live `bot` feed. It does not install
-the separate PlayIntegrityFix module or
-provide its provider/signature spoofing. Desktop browser previews use labelled
-sample data and do not apply settings to a phone. A saved profile or successful
-property hook does not establish a passing Play Integrity verdict.
+The reader accepts canonical profile versions 1 and 2. It validates the
+original wire representation before fixing the effective in-memory flags to
+Store-only; reading leaves the saved file unchanged. Other versions and
+unknown fields are rejected. New profiles use version 2. Legacy CLI flag
+values do not change the fixed scope.
 
-A general Play Integrity checker application is not one of the target
-processes. Its own `Build.FINGERPRINT` display can therefore remain the device
-value even when the Google Play services process receives the selected profile
-or the optional store Build spoofing is active. Check the `OhMyKeymint-PIF` log entries for the target process
-and hook status when diagnosing the integration; a payload or Zygisk Next change
-also requires a reboot before new app processes can load it.
+Zygisk Next must be installed and active by the user; OMK does not bundle,
+install, or implement that loader. The helper ends the Google Play services
+unstable and Play Store process families after a successful apply or disable.
+New processes then read the selected state. Turning off the main switch and
+applying removes the profile. Installing or updating the Zygisk payload, or
+enabling Zygisk Next for the first time, requires a device reboot.
+
+This action does not change global system properties, OMK's attested device
+identity, or the security-patch synchronization setting. It does not install
+the separate PlayIntegrityFix module or provide its provider/signature
+spoofing. Desktop browser previews use labelled sample data and do not apply
+settings to a phone. A saved profile or verified Java update does not establish
+a passing Play Integrity verdict.
+
+A general Play Integrity checker application is outside the target scope, so
+its own `Build.FINGERPRINT` display can remain the device value while the Play
+Store receives the selected profile. Check the `OhMyKeymint-PIF` log entries
+for the Play Store process and Java readback status when diagnosing the
+integration.
 
 If you changed `vb_hash` from `"random"` back to `"auto"`, or changed `vb_key`
 the same way before an auto snapshot was saved, a full

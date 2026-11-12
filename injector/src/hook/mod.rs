@@ -7,6 +7,7 @@ pub(crate) mod binder;
 mod install;
 mod intercept;
 pub(crate) mod rewrite;
+#[cfg(feature = "soter")]
 pub(crate) mod soter;
 
 static OLD_IOCTL: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
@@ -32,11 +33,11 @@ pub(super) type BinderStateKey = u64;
 /// Called by the installed ioctl hook with the same ABI and pointer validity
 /// requirements as libc ioctl. `arg` must be valid for the request being made.
 unsafe extern "C" fn new_ioctl(fd: c_int, request: c_int, arg: *mut c_void) -> c_int {
+    #[cfg(feature = "soter")]
     if soter::enabled() {
-        soter::ioctl(fd, request, arg)
-    } else {
-        intercept::new_ioctl(fd, request, arg)
+        return soter::ioctl(fd, request, arg);
     }
+    intercept::new_ioctl(fd, request, arg)
 }
 
 pub fn init_hook() -> anyhow::Result<()> {

@@ -2,122 +2,78 @@
 SKIPUNZIP=1
 
 SONAME="Oh My Keymint"
-SUPPORTED_ABIS="arm64 x64"
-MIN_SDK=29
+MIN_SDK=31
 
-if [ "$BOOTMODE" ] && [ "$KSU" ]; then
-  ui_print "- Installing from KernelSU app"
-  ui_print "- KernelSU version: $KSU_KERNEL_VER_CODE (kernel) + $KSU_VER_CODE (ksud)"
-  if [ "$(which magisk)" ]; then
-    ui_print "*********************************************************"
-    ui_print "! Multiple root implementation is NOT supported!"
-    ui_print "! Please uninstall Magisk before installing Oh My Keymint"
-    abort    "*********************************************************"
-  fi
-elif [ "$BOOTMODE" ] && [ "$MAGISK_VER_CODE" ]; then
-  ui_print "- Installing from Magisk app"
+case "${BOOTMODE:-}" in
+  true|1) ;;
+  *) abort "! Install from a running Android module manager" ;;
+esac
+
+# Both KernelSU and APatch export compatibility MAGISK_VER values. Test their
+# documented identity flags first; framework version numbers are not features.
+if [ "${APATCH:-}" = true ]; then
+  ui_print "- Installing from APatch"
+elif [ "${KSU:-}" = true ]; then
+  ui_print "- Installing from KernelSU"
+elif [ -r /data/adb/magisk/util_functions.sh ] || command -v magisk >/dev/null 2>&1; then
+  ui_print "- Installing from Magisk"
 else
-  ui_print "*********************************************************"
-  ui_print "! Install from recovery is not supported"
-  ui_print "! Please install from KernelSU or Magisk app"
-  abort    "*********************************************************"
+  abort "! Expected a KernelSU, APatch or Magisk module installer"
 fi
 
-VERSION=$(grep_prop version "${TMPDIR}/module.prop")
-ui_print "- Installing $SONAME $VERSION"
+case "$ARCH" in
+  arm64|arm64-v8a) BINARY_ABI=arm64-v8a ;;
+  x64|x86_64) BINARY_ABI=x86_64 ;;
+  *) abort "! Unsupported platform: $ARCH" ;;
+esac
+case "$API" in
+  ''|*[!0-9]*) abort "! Missing Android API level" ;;
+esac
+[ "$API" -ge "$MIN_SDK" ] || abort "! Android 12 or newer is required"
+ui_print "- Device platform: $BINARY_ABI (API $API)"
 
-# check architecture
-support=false
-for abi in $SUPPORTED_ABIS
-do
-  if [ "$ARCH" == "$abi" ]; then
-    support=true
-  fi
-done
-if [ "$support" == "false" ]; then
-  abort "! Unsupported platform: $ARCH"
-else
-  ui_print "- Device platform: $ARCH"
-fi
-
-# check android
-if [ "$API" -lt $MIN_SDK ]; then
-  ui_print "! Unsupported sdk: $API"
-  abort "! Minimal supported sdk is $MIN_SDK"
-else
-  ui_print "- Device sdk: $API"
-fi
-
-ui_print "- Extracting verify.sh"
+ui_print "- Extracting verifier"
 unzip -o "$ZIPFILE" 'verify.sh' -d "$TMPDIR" >&2
-if [ ! -f "$TMPDIR/verify.sh" ]; then
-  ui_print "*********************************************************"
-  ui_print "! Unable to extract verify.sh!"
-  ui_print "! This zip may be corrupted, please try downloading again"
-  abort    "*********************************************************"
-fi
+[ -f "$TMPDIR/verify.sh" ] || abort "! Missing verify.sh"
 . "$TMPDIR/verify.sh"
-extract "$ZIPFILE" 'customize.sh'  "$TMPDIR/.vunzip"
-extract "$ZIPFILE" 'verify.sh'     "$TMPDIR/.vunzip"
+extract "$ZIPFILE" 'customize.sh' "$TMPDIR/.vunzip"
+extract "$ZIPFILE" 'verify.sh' "$TMPDIR/.vunzip"
+extract "$ZIPFILE" 'payload.manifest' "$MODPATH"
 
-ui_print "- Extracting module files"
-extract "$ZIPFILE" 'module.prop'     "$MODPATH"
-extract "$ZIPFILE" 'post-fs-data.sh' "$MODPATH"
-extract "$ZIPFILE" 'service.sh'      "$MODPATH"
-extract "$ZIPFILE" 'uninstall.sh'    "$MODPATH"
-extract "$ZIPFILE" 'sepolicy.rule'   "$MODPATH"
-extract "$ZIPFILE" 'daemon'          "$MODPATH"
-extract "$ZIPFILE" 'daemon-injector' "$MODPATH"
-extract "$ZIPFILE" 'injector.toml'   "$MODPATH"
-extract "$ZIPFILE" 'keybox.xml'      "$MODPATH"
-extract "$ZIPFILE" 'webroot.manifest' "$MODPATH"
-
+# The build creates this complete, hash-verified inventory for each variant.
+# Optional PIF/SOTER files are installed only when actually shipped.
 while IFS= read -r asset || [ -n "$asset" ]; do
   case "$asset" in
-    webroot/*) ;;
-    *) abort "! Invalid WebUI asset path: $asset" ;;
+    ''|/*|../*|*/../*|*/..|./*|*/./*|*/.|*//*|*\\*|*[!a-zA-Z0-9_./+-]*)
+      abort "! Invalid payload path: $asset" ;;
+    META-INF/*|customize.sh|verify.sh|payload.manifest|*.sha256)
+      abort "! Unexpected payload entry: $asset" ;;
   esac
   extract "$ZIPFILE" "$asset" "$MODPATH"
-done < "$MODPATH/webroot.manifest"
+done < "$MODPATH/payload.manifest"
 
-chmod 755 "$MODPATH/daemon" "$MODPATH/daemon-injector" \
-  "$MODPATH/post-fs-data.sh" "$MODPATH/service.sh" "$MODPATH/uninstall.sh"
-find "$MODPATH/webroot" -type d -exec chmod 0755 {} \;
-find "$MODPATH/webroot" -type f -exec chmod 0644 {} \;
-chmod 0644 "$MODPATH/webroot.manifest"
+for required in module.prop post-fs-data.sh service.sh daemon daemon-injector \
+  uninstall.sh sepolicy.rule r1-build.json arm64-v8a/r1-helper \
+  "libs/$BINARY_ABI/keymint" "libs/$BINARY_ABI/inject"
+do
+  [ -f "$MODPATH/$required" ] || abort "! Missing required payload: $required"
+done
 
+VERSION=$(grep_prop version "$MODPATH/module.prop")
+ui_print "- Installing $SONAME $VERSION"
+set_perm_recursive "$MODPATH" 0 0 0755 0644
+chmod 0755 "$MODPATH/daemon" "$MODPATH/daemon-injector" \
+  "$MODPATH/post-fs-data.sh" "$MODPATH/service.sh" "$MODPATH/uninstall.sh" \
+  "$MODPATH/libs/$BINARY_ABI/keymint" "$MODPATH/libs/$BINARY_ABI/inject" \
+  "$MODPATH/arm64-v8a/r1-helper"
+for library in "$MODPATH/zygisk/$BINARY_ABI.so" "$MODPATH/libs/$BINARY_ABI/libomk_engineer.so"; do
+  [ ! -f "$library" ] || chmod 0755 "$library"
+done
 
-if [ "$ARCH" = "x64" ] || [ "$ARCH" = "x86_64" ]; then
-  ui_print "- Using packaged x64 binaries"
-  BINDIR="$MODPATH/libs/x86_64"
-  ZYGISK_ABI="x86_64"
-  extract "$ZIPFILE" 'libs/x86_64/keymint' "$MODPATH"
-  extract "$ZIPFILE" 'libs/x86_64/inject'  "$MODPATH"
-elif [ "$ARCH" = "arm64" ] || [ "$ARCH" = "arm64-v8a" ]; then
-  ui_print "- Using packaged arm64 binaries"
-  BINDIR="$MODPATH/libs/arm64-v8a"
-  ZYGISK_ABI="arm64-v8a"
-  extract "$ZIPFILE" 'libs/arm64-v8a/keymint' "$MODPATH"
-  extract "$ZIPFILE" 'libs/arm64-v8a/inject'  "$MODPATH"
-else
-  abort "! Unsupported platform: $ARCH"
-fi
-
-[ -f "$BINDIR/keymint" ] || abort "! Missing $BINDIR/keymint"
-[ -f "$BINDIR/inject" ] || abort "! Missing $BINDIR/inject"
-chmod 755 "$BINDIR/keymint" "$BINDIR/inject"
-
-ui_print "- Extracting Zygisk PIF payload"
-extract "$ZIPFILE" "zygisk/$ZYGISK_ABI.so" "$MODPATH"
-extract "$ZIPFILE" "libs/$ZYGISK_ABI/libomk_engineer.so" "$MODPATH"
-[ -f "$MODPATH/zygisk/$ZYGISK_ABI.so" ] || abort "! Missing Zygisk PIF payload"
-chmod 755 "$MODPATH/zygisk/$ZYGISK_ABI.so"
-
-CONFIG_DIR=/data/adb/omk
-mkdir -p "$CONFIG_DIR"
-rm -f "$CONFIG_DIR/restart.keymint" "$CONFIG_DIR/restart.injector" "$CONFIG_DIR/restart.all"
-rm -f "$CONFIG_DIR/keymint" "$CONFIG_DIR/inject" "$CONFIG_DIR/injector" # clean up old hot-update binaries
-
-if [ ! -e "$CONFIG_DIR/omkdata" ] && [ ! -L "$CONFIG_DIR/omkdata" ]; then
-  ln -s /data/misc/keystore/omk "$CONFIG_DIR/omkdata"
+STATE_DIR=/data/adb/omk
+mkdir -p "$STATE_DIR"
+rm -f "$STATE_DIR/restart.keymint" "$STATE_DIR/restart.injector" "$STATE_DIR/restart.all"
+rm -f "$STATE_DIR/keymint" "$STATE_DIR/inject" "$STATE_DIR/injector"
+if [ ! -e "$STATE_DIR/omkdata" ] && [ ! -L "$STATE_DIR/omkdata" ]; then
+  ln -s /data/misc/keystore/omk "$STATE_DIR/omkdata"
 fi

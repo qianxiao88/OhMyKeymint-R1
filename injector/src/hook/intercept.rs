@@ -44,12 +44,15 @@ pub(super) use fd::{
 };
 pub(super) use ioctl::new_ioctl;
 
+#[cfg(feature = "soter")]
 pub(super) fn native_submission(fd: c_int, reply: bool, expects_reply: bool) {
     ioctl::read::record_transaction_completion(fd, reply, expects_reply, None);
 }
+#[cfg(feature = "soter")]
 pub(super) fn native_read(fd: c_int, command: u32) {
     ioctl::read::observe_native_completion(fd, command);
 }
+#[cfg(feature = "soter")]
 pub(super) fn native_pending(connection: BinderStateKey) -> bool {
     PENDING_TRANSACTION_COMPLETIONS
         .with(|pending| pending.borrow().get(&connection).is_some_and(|queue| !queue.is_empty()))
@@ -409,6 +412,7 @@ fn binder_state_key(fd: c_int) -> BinderStateKey {
 }
 
 fn reset_current_thread_binder_state(connection: BinderStateKey) {
+    #[cfg(feature = "soter")]
     if super::soter::enabled() {
         super::soter::reset_thread(connection);
     }
@@ -433,6 +437,7 @@ fn forget_current_thread_binder_fd(fd: c_int, retired: Option<BinderStateKey>) {
     if let Some(connection) = retired {
         reset_current_thread_binder_state(connection);
         if binder_connection_cleanup_ready(connection) {
+            #[cfg(feature = "soter")]
             if super::soter::enabled() {
                 super::soter::retire_connection(connection);
             }

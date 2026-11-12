@@ -19,6 +19,7 @@ pub mod ipc;
 pub mod legacy;
 pub mod logging;
 pub mod parcel;
+#[cfg(feature = "soter")]
 mod soter_watch;
 pub mod sys;
 pub mod tracker;
@@ -185,6 +186,7 @@ fn handle_webui_config_command() -> Option<Result<String, String>> {
 }
 
 fn main() {
+    #[cfg(feature = "soter")]
     if std::env::args().nth(1).as_deref() == Some("--soter-watch") {
         if std::env::args().count() != 2 {
             std::process::exit(2);
@@ -228,6 +230,11 @@ fn main() {
             }
         }
         return;
+    }
+
+    if std::env::args().nth(1).is_some_and(|arg| arg.starts_with("--")) {
+        eprintln!("unsupported helper command");
+        std::process::exit(2);
     }
 
     logging::init_logger_fallback(LevelFilter::Debug);
@@ -322,6 +329,7 @@ pub extern "C" fn entry(handle: *const c_void) -> bool {
 
 /// # Safety
 /// The root injector transfers two distinct owned connected socket descriptors.
+#[cfg(feature = "soter")]
 #[no_mangle]
 pub unsafe extern "C" fn soter_entry(_handle: *const c_void, auth: i32, calls: i32) -> bool {
     use std::os::{fd::FromRawFd, unix::net::UnixStream};

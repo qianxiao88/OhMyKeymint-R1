@@ -1,5 +1,7 @@
+#[cfg(any(test, feature = "pif"))]
 use std::{fs, io, path::Path};
 
+#[cfg(any(test, feature = "pif"))]
 use anyhow::{bail, Context, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +19,7 @@ pub fn get_current_time_in_milliseconds() -> i64 {
 }
 /// Stop matching Android processes without setting the package's force-stop
 /// flag. Android may rebind services normally with their updated configuration.
+#[cfg(feature = "pif")]
 pub(crate) fn stop_processes_matching(matches: impl Fn(&[u8]) -> bool) -> Result<()> {
     stop_processes_in(Path::new("/proc"), matches, |pid| {
         if unsafe { libc::kill(pid, libc::SIGKILL) } == 0 {
@@ -27,6 +30,7 @@ pub(crate) fn stop_processes_matching(matches: impl Fn(&[u8]) -> bool) -> Result
     })
 }
 
+#[cfg(any(test, feature = "pif"))]
 fn stop_processes_in(
     proc_root: &Path,
     matches: impl Fn(&[u8]) -> bool,

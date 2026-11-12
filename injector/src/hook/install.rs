@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::ffi::{c_void, CStr};
 use std::path::Path;
 use std::sync::atomic::{AtomicPtr, Ordering};
+#[cfg(feature = "soter")]
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -15,9 +16,12 @@ use super::{
 };
 use crate::{config, ipc};
 
+#[cfg(feature = "soter")]
 static SOTER_LIBRARIES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+#[cfg(feature = "soter")]
 static SOTER_REFRESH: OnceLock<Result<(), String>> = OnceLock::new();
 
+#[cfg(feature = "soter")]
 pub(super) fn init_soter_hooks() -> Result<()> {
     install_hooks()?;
     let result = SOTER_REFRESH.get_or_init(|| {
@@ -67,7 +71,11 @@ fn install_hooks() -> Result<()> {
         );
     }
 
+    #[cfg(feature = "soter")]
     let soter = super::soter::enabled();
+    #[cfg(not(feature = "soter"))]
+    let soter = false;
+    #[cfg(feature = "soter")]
     let mut installed = soter.then(|| SOTER_LIBRARIES.lock().unwrap_or_else(|e| e.into_inner()));
     if !soter {
         let _ = config::get();
@@ -87,17 +95,25 @@ fn install_hooks() -> Result<()> {
     let maps = read_self_maps().context("failed to read self maps for binder hook discovery")?;
     let mut targets = Vec::new();
     let mut seen = HashSet::new();
+    #[cfg(feature = "soter")]
     let mut target_identities = Vec::new();
     for map in &maps {
-        if let Some(path) = binder_library_path(map, soter) {
+        if let Some(path) = binder_library_path(
+            map,
+            #[cfg(feature = "soter")]
+            soter,
+        ) {
             if !seen.insert((map.device, map.inode)) {
                 continue;
             }
-            let identity = format!("{}:{}:{}", map.device.major, map.device.minor, map.inode);
-            if installed.as_ref().is_some_and(|list| list.contains(&identity)) {
-                continue;
+            #[cfg(feature = "soter")]
+            {
+                let identity = format!("{}:{}:{}", map.device.major, map.device.minor, map.inode);
+                if installed.as_ref().is_some_and(|list| list.contains(&identity)) {
+                    continue;
+                }
+                target_identities.push(identity);
             }
-            target_identities.push(identity);
             debug!(
                 "Found binder library for ioctl hook: {} (dev={}:{}, inode={})",
                 path.display(),
@@ -114,6 +130,7 @@ fn install_hooks() -> Result<()> {
     drop(maps);
 
     if targets.is_empty() {
+        #[cfg(feature = "soter")]
         if installed.as_ref().is_some_and(|list| !list.is_empty()) {
             return Ok(());
         }
@@ -183,6 +200,7 @@ fn install_hooks() -> Result<()> {
         }
     }
 
+    #[cfg(feature = "soter")]
     if let Some(installed) = &mut installed {
         // Never re-hook an already patched image, even after partial failure.
         installed.extend(target_identities);
@@ -204,12 +222,11 @@ fn install_hooks() -> Result<()> {
     Ok(())
 }
 
-fn binder_library_path(map: &MapInfo, soter: bool) -> Option<&Path> {
+fn binder_library_path(map: &MapInfo, #[cfg(feature = "soter")] soter: bool) -> Option<&Path> {
     let path = map.path.as_deref()?;
     let name = path.file_name()?.to_str()?;
-    (name.starts_with("libbinder")
-        || name == "libhwbinder.so"
-        || (soter && name == "libhidlbase.so"))
-        .then_some(path)
-        .filter(|path| path.is_absolute())
+    let binder_library = name.starts_with("libbinder") || name == "libhwbinder.so";
+    #[cfg(feature = "soter")]
+    let binder_library = binder_library || (soter && name == "libhidlbase.so");
+    binder_library.then_some(path).filter(|path| path.is_absolute())
 }

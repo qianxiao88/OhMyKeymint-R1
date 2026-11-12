@@ -8,7 +8,6 @@ import {
   MiuixProgressIndicator,
   MiuixRadioButtonPreference,
   MiuixSwitch,
-  MiuixSwitchPreference,
 } from 'miuix-vue'
 import MiuixBottomSheet from './StableBottomSheet.vue'
 import { Info, Refresh, Tune } from 'miuix-vue/icons'
@@ -32,9 +31,9 @@ let previewState: PifFingerprintState = {
   fingerprint: 'google/bluejay_beta/bluejay:CANARY/ZP11.260918.007/16484274:user/release-keys',
   security_patch: '2026-10-05',
   device_initial_sdk_int: 32,
-  spoof_build: true,
-  spoof_props: true,
-  spoof_vending_build: false,
+  spoof_build: false,
+  spoof_props: false,
+  spoof_vending_build: true,
 }
 
 const props = defineProps<{
@@ -57,9 +56,6 @@ const catalogStatus = ref<LoadStatus>('loading')
 const stateError = ref('')
 const catalogError = ref('')
 const desiredEnabled = ref(false)
-const spoofBuild = ref(true)
-const spoofProps = ref(true)
-const spoofVendingBuild = ref(false)
 const selectedProduct = ref<string | null>(RANDOM_SELECTION)
 let loadGeneration = 0
 let catalogRequested = false
@@ -72,7 +68,7 @@ function tr(key: string, fallback: string, ...args: unknown[]): string {
   return fallback.replace(/%s/g, () => String(args[index++] ?? ''))
 }
 
-const canApply = computed(() => stateStatus.value === 'ready'
+const canApply = computed(() => stateStatus.value !== 'loading'
   && (!desiredEnabled.value
     || (catalogStatus.value === 'ready'
       && selectedProduct.value !== null
@@ -110,7 +106,7 @@ function isActive(generation: number): boolean {
 }
 
 function reconcileSelection(): void {
-  if (stateStatus.value !== 'ready' || catalogStatus.value !== 'ready') return
+  if (stateStatus.value === 'loading' || catalogStatus.value !== 'ready') return
   if (selectedProduct.value === RANDOM_SELECTION) return
   if (selectedProduct.value !== null
       && devices.value.some(device => device.product === selectedProduct.value)) return
@@ -127,9 +123,6 @@ function load(): void {
   stateError.value = ''
   catalogError.value = ''
   desiredEnabled.value = false
-  spoofBuild.value = true
-  spoofProps.value = true
-  spoofVendingBuild.value = false
   selectedProduct.value = RANDOM_SELECTION
   const generation = ++loadGeneration
   void loadState(generation)
@@ -145,9 +138,6 @@ async function loadState(generation: number): Promise<void> {
     if (!isActive(generation)) return
     currentState.value = state
     desiredEnabled.value = state.enabled
-    spoofBuild.value = state.enabled ? state.spoof_build : true
-    spoofProps.value = state.enabled ? state.spoof_props : true
-    spoofVendingBuild.value = state.enabled ? state.spoof_vending_build : false
     selectedProduct.value = state.enabled ? state.product : RANDOM_SELECTION
     stateStatus.value = 'ready'
     reconcileSelection()
@@ -224,9 +214,9 @@ async function apply(): Promise<void> {
         fingerprint: `google/${sample.product}/${sample.product.replace(/_beta$/, '')}:CANARY/ZP11.260918.007/16484274:user/release-keys`,
         security_patch: '2026-10-05',
         device_initial_sdk_int: sample.sdk,
-        spoof_build: spoofBuild.value,
-        spoof_props: spoofProps.value,
-        spoof_vending_build: spoofVendingBuild.value,
+        spoof_build: false,
+        spoof_props: false,
+        spoof_vending_build: true,
       } : { enabled: false }
       currentState.value = previewState
       emit('notify', tr('pif_preview_applied', 'Preview updated only; no phone settings were changed.'))
@@ -234,7 +224,7 @@ async function apply(): Promise<void> {
     }
     if (device) {
       const state = await props.cli.applyPifFingerprint(
-        device.product, spoofBuild.value, spoofProps.value, spoofVendingBuild.value,
+        device.product, false, false, true,
       )
       currentState.value = state
       emit('notify', tr(
@@ -270,7 +260,7 @@ async function apply(): Promise<void> {
   >
     <div class="pif-sheet" :aria-busy="busy">
       <p v-if="preview" class="pif-preview" role="status">
-        {{ tr('pif_preview', 'Browser preview with example data. No device configuration is changed.') }}
+        {{ tr('pif_example_catalog_preview', 'Development preview: example devices and configuration only, not real device data.') }}
       </p>
       <MiuixCard class="pif-card" press-feedback="none">
         <!-- Toggle on click, not the switch's pointerup: collapsing this sheet
@@ -280,10 +270,9 @@ async function apply(): Promise<void> {
           role="switch"
           :aria-checked="desiredEnabled"
           :aria-label="tr('pif_enable_spoofing', 'Enable PIF fingerprint spoofing')"
-          :aria-disabled="busy || stateStatus !== 'ready'"
+          :aria-disabled="busy || stateStatus === 'loading'"
           :title="tr('pif_enable_spoofing', 'Enable PIF fingerprint spoofing')"
-          :summary="tr('pif_zygisk_next_required', 'Install and enable Zygisk Next separately. OMK does not bundle it.')"
-          :disabled="busy || stateStatus !== 'ready'"
+          :disabled="busy || stateStatus === 'loading'"
           @click="desiredEnabled = !desiredEnabled"
         >
           <template #start><MiuixIcon :icon="Tune" :size="23" /></template>
@@ -291,33 +280,12 @@ async function apply(): Promise<void> {
             <MiuixSwitch
               class="pif-enable-control"
               :model-value="desiredEnabled"
-              :disabled="busy || stateStatus !== 'ready'"
+              :disabled="busy || stateStatus === 'loading'"
               tabindex="-1"
               aria-hidden="true"
             />
           </template>
         </MiuixBasicComponent>
-      </MiuixCard>
-
-      <MiuixCard v-if="desiredEnabled && stateStatus === 'ready'" class="pif-card" press-feedback="none">
-        <MiuixSwitchPreference
-          v-model="spoofBuild"
-          :title="tr('pif_spoof_build', 'Spoof Build')"
-          :summary="tr('pif_spoof_build_desc', 'Apply Pixel Build fields and the launch SDK to Google Play services only; the running Android SDK stays unchanged.')"
-          :disabled="busy"
-        />
-        <MiuixSwitchPreference
-          v-model="spoofVendingBuild"
-          :title="tr('pif_spoof_vending', 'Spoof Build (Play Store)')"
-          :summary="tr('pif_spoof_vending_desc', 'Apply the selected Pixel Build fields to Play Store, including model, fingerprint and patch date. Independent of GMS; SDK and native properties stay unchanged.')"
-          :disabled="busy"
-        />
-        <MiuixSwitchPreference
-          v-model="spoofProps"
-          :title="tr('pif_spoof_props', 'Spoof Props')"
-          :summary="tr('pif_spoof_props_desc', 'Override selected property reads in Google Play services only; global and Play Store properties stay unchanged.')"
-          :disabled="busy"
-        />
       </MiuixCard>
 
       <MiuixCard
@@ -347,54 +315,56 @@ async function apply(): Promise<void> {
       </div>
       <div v-else-if="stateStatus === 'error'" class="pif-status pif-status--error" role="alert">
         <MiuixIcon :icon="Info" :size="24" />
-        <strong>{{ tr('pif_config_load_error', 'Failed to load the PIF configuration') }}</strong>
+        <strong>{{ tr('pif_config_recovery', 'Current configuration could not be loaded. Select a device to replace it, or switch off and apply to clear it.') }}</strong>
         <span v-if="stateError">{{ stateError }}</span>
         <MiuixButton :disabled="busy" @click="retryState">
           <MiuixIcon :icon="Refresh" :size="18" />
           {{ tr('functional_button_retry', 'Retry') }}
         </MiuixButton>
       </div>
-      <div v-else-if="!desiredEnabled" class="pif-status" role="status">
-        <span>{{ tr('pif_disabled', 'Disabled') }}</span>
-      </div>
-      <div v-else-if="catalogStatus === 'loading'" class="pif-status" role="status">
-        <MiuixProgressIndicator type="circular" :size="26" :stroke-width="2.5" />
-        <span>{{ tr('pif_loading_devices', 'Loading Pixel devices...') }}</span>
-      </div>
-      <div v-else-if="catalogStatus === 'error'" class="pif-status pif-status--error" role="alert">
-        <MiuixIcon :icon="Info" :size="24" />
-        <strong>{{ tr('pif_devices_load_error', 'Failed to load Pixel devices') }}</strong>
-        <span v-if="catalogError">{{ catalogError }}</span>
-        <MiuixButton :disabled="busy" @click="retryCatalog">
-          <MiuixIcon :icon="Refresh" :size="18" />
-          {{ tr('functional_button_retry', 'Retry') }}
-        </MiuixButton>
-      </div>
-      <template v-else>
-        <div class="catalog-heading">
-          <h3>{{ tr('pif_choose_device', 'Choose a Pixel device') }}</h3>
+      <template v-if="stateStatus !== 'loading'">
+        <div v-if="!desiredEnabled && stateStatus === 'ready'" class="pif-status" role="status">
+          <span>{{ tr('pif_disabled', 'Disabled') }}</span>
+        </div>
+        <div v-else-if="desiredEnabled && catalogStatus === 'loading'" class="pif-status" role="status">
+          <MiuixProgressIndicator type="circular" :size="26" :stroke-width="2.5" />
+          <span>{{ tr('pif_loading_devices', 'Loading Pixel devices...') }}</span>
+        </div>
+        <div v-else-if="desiredEnabled && catalogStatus === 'error'" class="pif-status pif-status--error" role="alert">
+          <MiuixIcon :icon="Info" :size="24" />
+          <strong>{{ tr('pif_devices_load_error', 'Failed to load Pixel devices') }}</strong>
+          <span v-if="catalogError">{{ catalogError }}</span>
           <MiuixButton :disabled="busy" @click="retryCatalog">
             <MiuixIcon :icon="Refresh" :size="18" />
-            {{ tr('pif_refresh_devices', 'Refresh list') }}
+            {{ tr('functional_button_retry', 'Retry') }}
           </MiuixButton>
         </div>
-        <MiuixCard class="pif-card device-list" press-feedback="none">
-          <MiuixRadioButtonPreference
-            :model-value="selectedProduct === RANDOM_SELECTION"
-            :title="tr('pif_random_device', 'Random')"
-            :disabled="busy"
-            @select="selectedProduct = RANDOM_SELECTION"
-          />
-          <MiuixRadioButtonPreference
-            v-for="device in renderedDevices"
-            :key="device.product"
-            :model-value="selectedProduct === device.product"
-            :title="device.model"
-            :summary="device.product"
-            :disabled="busy"
-            @select="selectedProduct = device.product"
-          />
-        </MiuixCard>
+        <template v-else-if="desiredEnabled">
+          <div class="catalog-heading">
+            <h3>{{ tr('pif_choose_device', 'Choose a Pixel device') }}</h3>
+            <MiuixButton :disabled="busy" @click="retryCatalog">
+              <MiuixIcon :icon="Refresh" :size="18" />
+              {{ tr('pif_refresh_devices', 'Refresh list') }}
+            </MiuixButton>
+          </div>
+          <MiuixCard class="pif-card device-list" press-feedback="none">
+            <MiuixRadioButtonPreference
+              :model-value="selectedProduct === RANDOM_SELECTION"
+              :title="tr('pif_random_device', 'Random')"
+              :disabled="busy"
+              @select="selectedProduct = RANDOM_SELECTION"
+            />
+            <MiuixRadioButtonPreference
+              v-for="device in renderedDevices"
+              :key="device.product"
+              :model-value="selectedProduct === device.product"
+              :title="device.model"
+              :summary="device.product"
+              :disabled="busy"
+              @select="selectedProduct = device.product"
+            />
+          </MiuixCard>
+        </template>
       </template>
 
       <div class="sheet-actions">

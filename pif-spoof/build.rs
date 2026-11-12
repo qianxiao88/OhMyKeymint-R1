@@ -22,7 +22,7 @@ fn main() {
     let target = env::var("TARGET").unwrap();
     let root =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).parent().unwrap().to_owned();
-    let status = Command::new("python")
+    let status = Command::new("python3")
         .arg(root.join("scripts/build_engineer_bridge.py"))
         .args(["--target", &target, "--sdk"])
         .arg(&sdk)

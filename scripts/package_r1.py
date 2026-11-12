@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Repackage the pinned upstream Release; never compile or replace its native code."""
+"""Deterministic R1 source-build packaging helpers; CLI delegates to build.py."""
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -13,22 +12,28 @@ import shutil
 import stat
 import struct
 import sys
+import tempfile
 import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UPSTREAM_COMMIT = "e0c4a096e5551816dacd60221e08b40eb2a4903b"
-BASE_SHA256 = "b58618e8a6566f9dc0542132365607fc20ff49ee7169c7a2466cfea6576f7e92"
-UPSTREAM_VERSION = "1.4.2"
-BRAND = "1.3.8-301"
+VERSION = "1.3.8"
+VERSION_CODE = 302
+BRAND = f"{VERSION}-{VERSION_CODE}"
 AUTHOR = "\u6d45\u7b11\u5450"
-VARIANTS = ("lite", "no-soter", "full")
+VARIANTS = ("full", "no-soter", "lite")
+FEATURES = {"full": ("soter", "pif", "local-rkp"),
+            "no-soter": ("pif", "local-rkp"), "lite": ()}
+INJECTOR_FEATURES = {"full": ("soter",), "no-soter": (), "lite": ()}
+HELPER_PATH = "arm64-v8a/r1-helper"
+SKROOT_ID32 = "3e5017f4de9b4d86a25d7d320fbd29e2"
+HASH_PLACEHOLDER = "{content_hash}"
 GIB = 1024**3
 MAX_FILE = 128 * 1024**2
 MAX_TOTAL = 512 * 1024**2
 MAX_ENTRIES = 10000
-HELPER_PATH = "arm64-v8a/r1-helper"
-# Bytes and UNIX permission bits; directory records are deliberately regenerated.
+ZIP_TIMESTAMP = (2020, 1, 1, 0, 0, 0)
+# Bytes and normalized UNIX permission bits; directory records are omitted.
 EntryMap = dict[str, tuple[bytes, int]]
 
 
@@ -62,8 +67,10 @@ def safe_name(name: str, *, directory: bool = False) -> str:
 def check_tree(entries: EntryMap) -> None:
     if len(entries) > MAX_ENTRIES or sum(len(data) for data, _ in entries.values()) > MAX_TOTAL:
         raise ValueError("Payload exceeds entry count or total size limit")
-    for name, (data, _) in entries.items():
+    for name, (data, mode) in entries.items():
         safe_name(name)
+        if mode not in (0o644, 0o755):
+            raise ValueError(f"Non-normalized file mode: {name}: {mode:o}")
         if len(data) > MAX_FILE:
             raise ValueError(f"Entry exceeds size limit: {name}")
         parts = name.split("/")
@@ -77,7 +84,6 @@ def read_archive(stream: zipfile.ZipFile) -> EntryMap:
         raise ValueError("Archive exceeds entry count limit")
     seen: set[str] = set()
     total = 0
-    # Validate all declared sizes and paths before allocating decompressed data.
     for info in infos:
         name = safe_name(info.filename, directory=info.is_dir())
         kind = stat.S_IFMT(info.external_attr >> 16)
@@ -92,38 +98,14 @@ def read_archive(stream: zipfile.ZipFile) -> EntryMap:
             raise ValueError("Archive exceeds expanded size limit")
     entries = {}
     for info in infos:
-        if info.is_dir():
-            continue
-        # read() also verifies the ZIP CRC. The pinned digest authenticates the base.
-        data = stream.read(info)
-        mode = 0o755 if info.external_attr >> 16 & 0o111 else 0o644
-        entries[info.filename] = (data, mode)
+        if not info.is_dir():
+            mode = 0o755 if info.external_attr >> 16 & 0o111 else 0o644
+            entries[info.filename] = (stream.read(info), mode)
     check_tree(entries)
     for name in seen:
         parts = name.split("/")
         if any("/".join(parts[:i]) in entries for i in range(1, len(parts))):
             raise ValueError(f"File/directory collision: {name}")
-    return entries
-
-
-def load_base(path: Path) -> EntryMap:
-    if path.stat().st_size > MAX_TOTAL:
-        raise ValueError("Base ZIP exceeds compressed size limit")
-    # Use the same open file for digest and ZIP reads.
-    with path.open("rb") as stream:
-        if hashlib.file_digest(stream, "sha256").hexdigest() != BASE_SHA256:
-            raise ValueError("Unknown base ZIP: pinned upstream SHA256 mismatch")
-        stream.seek(0)
-        with zipfile.ZipFile(stream) as archive:
-            entries = read_archive(archive)
-    required = ("libs/arm64-v8a/keymint", "libs/arm64-v8a/inject", "service.sh",
-                "customize.sh", "verify.sh", "module.prop", "webroot.manifest")
-    if any(name not in entries for name in required):
-        raise ValueError("Pinned base has an unsupported module layout")
-    for name in required[:2]:
-        validate_helper(entries[name][0])
-    if not any(is_license(name) for name in entries):
-        raise ValueError("Upstream license files are required")
     return entries
 
 
@@ -134,7 +116,7 @@ def validate_helper(data: bytes) -> None:
             or struct.unpack_from("<I", data, 20)[0] != 1
             or struct.unpack_from("<H", data, 52)[0] != 64):
         raise ValueError("Expected a little-endian ELF64 AArch64 executable/PIE")
-    # e_machine/class cannot prove Android linkage, API level or device readiness.
+    # The header does not establish Android linkage, API level or device readiness.
 
 
 def read_input(path: Path) -> bytes:
@@ -147,77 +129,76 @@ def read_input(path: Path) -> bytes:
     return data
 
 
-def load_webroot(path: Path) -> EntryMap:
+def normalized_mode(name: str, data: bytes) -> int:
+    if (data.startswith(b"\x7fELF") or name.endswith(".sh")
+            or name in ("daemon", "daemon-injector", "META-INF/com/google/android/update-binary")):
+        return 0o755
+    return 0o644
+
+
+def load_tree(path: Path, *, prefix: str = "") -> EntryMap:
     if path.is_symlink() or not path.is_dir():
-        raise ValueError(f"Expected WebUI build directory: {path}")
+        raise ValueError(f"Expected payload directory: {path}")
     entries: EntryMap = {}
-    total = 0
     pending = [path]
-    count = 0
+    count = total = 0
     while pending:
         with os.scandir(pending.pop()) as children:
             for child in children:
                 count += 1
                 if count > MAX_ENTRIES:
-                    raise ValueError("WebUI exceeds directory/file count limit")
+                    raise ValueError("Payload exceeds directory/file count limit")
                 item = Path(child.path)
-                safe_name("webroot/" + item.relative_to(path).as_posix())
+                name = prefix + item.relative_to(path).as_posix()
+                safe_name(name)
                 if child.is_symlink():
-                    raise ValueError(f"WebUI symlink is unsupported: {item}")
+                    raise ValueError(f"Payload symlink is unsupported: {item}")
                 if child.is_dir(follow_symlinks=False):
                     pending.append(item)
                     continue
-                name = "webroot/" + item.relative_to(path).as_posix()
                 if name.endswith(".sha256"):
                     continue
                 data = read_input(item)
                 total += len(data)
                 if total > MAX_TOTAL:
-                    raise ValueError("WebUI exceeds total size limit")
-                entries[name] = (data, 0o644)
-    if any(name not in entries for name in ("webroot/index.html", "webroot/config.json")):
-        raise ValueError(f"Incomplete WebUI build: {path}")
+                    raise ValueError("Payload exceeds total size limit")
+                entries[name] = (data, normalized_mode(name, data))
     check_tree(entries)
     return entries
 
 
+def load_webroot(path: Path) -> EntryMap:
+    entries = load_tree(path, prefix="webroot/")
+    if any(name not in entries for name in ("webroot/index.html", "webroot/config.json")):
+        raise ValueError(f"Incomplete WebUI build: {path}")
+    return entries
+
+
 def is_license(name: str) -> bool:
-    upper = name.upper()
-    return any(token in upper for token in ("LICENSE", "COPYING", "NOTICE", "THIRD_PARTY"))
+    return any(token in name.upper() for token in ("LICENSE", "COPYING", "NOTICE", "THIRD_PARTY"))
 
 
-def is_soter_asset(name: str, data: bytes) -> bool:
-    return (not is_license(name) and not data.startswith(b"\x7fELF")
-            and any(part.lower().startswith(("soter", "soterta")) for part in name.split("/")))
-
-
-def boot_hook(template: bytes) -> bytes:
-    begin = b"# BEGIN R1 BOOT HOOK\n"
-    end = b"# END R1 BOOT HOOK\n"
-    if template.count(begin) != 1 or template.count(end) != 1:
-        raise ValueError("Missing or ambiguous R1 service hook markers")
-    return begin + template.split(begin, 1)[1].split(end, 1)[0] + end
-
-
-def replace_once(data: bytes, anchor: bytes, replacement: bytes) -> bytes:
-    if data.count(anchor) != 1:
-        raise ValueError(f"Unsupported upstream script anchor: {anchor!r}")
-    return data.replace(anchor, replacement, 1)
+def module_name(variant: str, digest: str = HASH_PLACEHOLDER) -> str:
+    if variant not in VARIANTS:
+        raise ValueError(f"Unsupported variant: {variant}")
+    return f"OhMyKeymint-R1-{BRAND}-{variant}-{digest}"
 
 
 def properties(base: bytes, stem: str, variant: str) -> bytes:
-    upstream_author = next((line[7:].strip() for line in base.decode("utf-8").splitlines()
-                            if line.startswith("author=")), "")
+    lines = base.decode("utf-8").splitlines()
+    original = next((line[7:].strip() for line in lines if line.startswith("author=")), "")
+    authors = [author.strip() for author in original.split(",") if author.strip()]
+    if AUTHOR not in authors:
+        authors.append(AUTHOR)
     values = {
-        "name": stem, "version": f"{BRAND}-{variant}", "versionCode": "301",
-        "author": f"{upstream_author},{AUTHOR}" if upstream_author else AUTHOR,
-        "description": "\u5f85\u542f\u52a8\u68c0\u67e5 | R1 " + variant + "; upstream 1.4.2 (precompiled)",
+        "name": stem, "version": f"{BRAND}-{variant}", "versionCode": str(VERSION_CODE),
+        "author": ",".join(authors),
+        "description": "OMK-R1 \u5f85\u542f\u52a8\u68c0\u67e5\u3002\u8fd0\u884c\u72b6\u6001\u53ca\u4e91\u7aef\u8fde\u63a5\u7ed3\u679c\u5c06\u5728\u542f\u52a8\u540e\u66f4\u65b0\u3002",
         "updateJson": ("https://raw.githubusercontent.com/qianxiao88/OhMyKeymint-R1/"
                        f"master/update-{variant}.json"),
     }
-    result = []
-    found = set()
-    for line in base.decode("utf-8").splitlines():
+    result, found = [], set()
+    for line in lines:
         key = line.split("=", 1)[0].strip()
         if key in values:
             if key not in found:
@@ -248,139 +229,172 @@ def add_checksums(entries: EntryMap) -> EntryMap:
     return result
 
 
-def make_variant(base: EntryMap, helper: bytes, webroot: EntryMap, variant: str,
-                 service_template: bytes, packager_digest: str) -> tuple[str, EntryMap, dict]:
+def normalized_payload(entries: EntryMap, variant: str, content_hash: str) -> EntryMap:
+    result = {name: entry for name, entry in entries.items()
+              if not name.endswith(".sha256") and name != "r1-build.json"}
+    final_name = module_name(variant, content_hash).encode()
+    placeholder_name = module_name(variant).encode()
+    for name, (data, mode) in list(result.items()):
+        if name == "module.prop" or name.startswith("webroot/"):
+            result[name] = (data.replace(final_name, placeholder_name), mode)
+    return result
+
+
+def finalize_variant(stage_dir: Path, variant: str, *, source: dict, build_type: str,
+                     upstream_version: str, builder_sha256: dict) -> tuple[str, EntryMap, dict]:
+    """Seal freshly compiled staging files; source provenance is part of the hash."""
     if variant not in VARIANTS:
         raise ValueError(f"Unsupported variant: {variant}")
-    validate_helper(helper)
-    check_tree(base)
-    check_tree(webroot)
-    if any(not name.startswith("webroot/") for name in webroot):
-        raise ValueError("WebUI entries must be under webroot/")
-    removed = []
-    entries: EntryMap = {}
-    native = {}
-    for name, (data, mode) in base.items():
-        if name.endswith(".sha256") or name.startswith("webroot/") or name == "webroot.manifest":
-            continue
-        if data.startswith(b"\x7fELF"):
-            native[name] = sha256(data)
-        if variant != "full" and is_soter_asset(name, data):
-            removed.append(name)
-            continue
-        entries[name] = (data, mode)
-    reserved = {HELPER_PATH, "r1-build.json", "r1-extra.manifest", "r1-no-soter"}
-    if reserved.intersection(entries):
-        raise ValueError("Base ZIP contains reserved R1 paths")
-    entries.update(webroot)
-    entries[HELPER_PATH] = (helper, 0o755)
-    entries["webroot.manifest"] = (("\n".join(sorted(webroot)) + "\n").encode(), 0o644)
-    anchor = b'start_daemon "$MODDIR/daemon" "$STATE_DIR/keymint-daemon.pid"'
-    service = replace_once(entries["service.sh"][0], anchor, boot_hook(service_template) + b"\n" + anchor)
-    entries["service.sh"] = (service, 0o755)
-    extras = sorted({HELPER_PATH, "r1-build.json"} | {n for n in entries if is_license(n)})
-    if variant != "full":
-        entries["r1-no-soter"] = (b"Disable via upstream native API before daemon startup.\n", 0o644)
-        extras.append("r1-no-soter")
-    entries["r1-extra.manifest"] = (("\n".join(sorted(extras)) + "\n").encode(), 0o644)
-    # Preserve upstream extraction/verification logic; extend only the ZIP copy.
-    anchor = b'while IFS= read -r asset || [ -n "$asset" ]; do'
-    extraction = b'''extract "$ZIPFILE" 'r1-extra.manifest' "$MODPATH"
-while IFS= read -r asset || [ -n "$asset" ]; do
-  extract "$ZIPFILE" "$asset" "$MODPATH"
-done < "$MODPATH/r1-extra.manifest"
-chmod 0755 "$MODPATH/arm64-v8a" "$MODPATH/arm64-v8a/r1-helper"
-chmod 0644 "$MODPATH/r1-build.json" "$MODPATH/r1-extra.manifest"
-
-'''
-    entries["customize.sh"] = (replace_once(entries["customize.sh"][0], anchor, extraction + anchor), 0o755)
-    stem_prefix = f"OhMyKeymint-R1-{BRAND}-{variant}-"
-    entries["module.prop"] = (properties(base["module.prop"][0], stem_prefix + "{content_hash}", variant), 0o644)
-    context = {"base_zip_sha256": BASE_SHA256, "upstream_commit": UPSTREAM_COMMIT,
-               "upstream_version": UPSTREAM_VERSION, "variant": variant,
-               "packager_sha256": packager_digest, "service_template_sha256": sha256(service_template)}
-    digest = content_digest(entries, context)
+    entries = load_tree(stage_dir)
+    required = ("libs/arm64-v8a/keymint", "libs/arm64-v8a/inject", HELPER_PATH,
+                "service.sh", "customize.sh", "module.prop", "webroot/index.html",
+                "webroot/config.json")
+    if any(name not in entries for name in required):
+        raise ValueError("Source build has an incomplete module layout")
+    for name in required[:3]:
+        validate_helper(entries[name][0])
+    pif_paths = ("zygisk/arm64-v8a.so", "libs/arm64-v8a/libomk_engineer.so",
+                 "libs/arm64-v8a/omk_engineer.dex")
+    if variant == "lite":
+        forbidden = [name for name in entries if name.startswith("zygisk/")
+                     or (name.startswith("libs/") and "engineer" in name.lower())]
+        if forbidden:
+            raise ValueError(f"Lite contains optional native payloads: {', '.join(sorted(forbidden))}")
+    elif any(name not in entries for name in pif_paths):
+        raise ValueError("Non-lite source build is missing its PIF/engineer payload")
+    else:
+        for name in pif_paths[:2]:
+            validate_helper(entries[name][0])
+        if not entries[pif_paths[2]][0].startswith(b"dex\n"):
+            raise ValueError("Engineer bridge requires a rebuilt DEX payload")
+    if "r1-no-soter" in entries or b"--webui-set-soter-local-base64" in entries["service.sh"][0]:
+        raise ValueError("Source variants must select Soter at compile time")
+    if not any(is_license(name) for name in entries):
+        raise ValueError("Project and third-party license files are required")
+    original_prop = entries["module.prop"][0]
+    entries["module.prop"] = (properties(original_prop, module_name(variant), variant), 0o644)
+    web_names = sorted(name for name in entries if name.startswith("webroot/"))
+    entries["webroot.manifest"] = (("\n".join(web_names) + "\n").encode(), 0o644)
+    excluded = {"customize.sh", "verify.sh", "payload.manifest", "r1-extra.manifest"}
+    payload = sorted({"r1-build.json"} | {name for name in entries
+                     if name not in excluded and not name.startswith("META-INF/")})
+    entries.pop("r1-extra.manifest", None)
+    entries["payload.manifest"] = (("\n".join(payload) + "\n").encode(), 0o644)
+    placeholder_name = module_name(variant).encode()
+    if not any(placeholder_name in data for name, (data, _) in entries.items()
+               if name.startswith("webroot/")):
+        raise ValueError("WebUI must be built with the variant's placeholder VITE_R1_NAME")
+    native = {name: sha256(data) for name, (data, _) in entries.items() if data.startswith(b"\x7fELF")}
+    context = {
+        "version": f"{BRAND}-{variant}", "version_code": VERSION_CODE, "variant": variant,
+        "features": list(FEATURES[variant]), "injector_features": list(INJECTOR_FEATURES[variant]),
+        "native_rebuilt": True, "source": source, "upstream_version": upstream_version,
+        "build_type": build_type, "target": "aarch64-linux-android",
+        "builder_sha256": builder_sha256, "native_sha256": native,
+        "helper_sha256": sha256(entries[HELPER_PATH][0]), "helper_interface": "monitor",
+        "validation": {"on_device": "pending", "android_linkage": "pending", "boot_status": "pending"},
+    }
+    digest = content_digest(normalized_payload(entries, variant, HASH_PLACEHOLDER), context)
     short_hash = digest[-7:]
-    stem = stem_prefix + short_hash
-    manifest = dict(context, version=f"{BRAND}-{variant}", hash=short_hash,
-                    content_sha256=digest, hash_kind="sha256-content-last7",
-                    hash_scope="sorted pre-metadata payload; module name uses {content_hash}; context included",
-                    native_rebuilt=False, upstream_native_sha256=native,
-                    upstream_author=next((line[7:] for line in base["module.prop"][0].decode().splitlines()
-                                          if line.startswith("author=")), ""),
-                    removed_soter_assets=sorted(removed),
-                    soter_policy="upstream" if variant == "full" else "disable-native-config-before-daemons",
-                    soter_code_in_upstream_binaries=True,
-                    validation={"on_device": "pending", "android_linkage": "pending",
-                                "boot_status": "pending"},
-                    helper_sha256=sha256(helper), helper_interface="monitor")
-    entries["module.prop"] = (properties(base["module.prop"][0], stem, variant), 0o644)
+    stem = module_name(variant, short_hash)
+    for name, (data, mode) in list(entries.items()):
+        if name == "module.prop" or name.startswith("webroot/"):
+            entries[name] = (data.replace(placeholder_name, stem.encode()), mode)
+    manifest = dict(context, hash=short_hash, content_sha256=digest,
+                    hash_kind="sha256-content-last7",
+                    hash_scope={"payload": "all sorted path/mode/bytes with length framing",
+                                "exclude": ["r1-build.json", "*.sha256"],
+                                "normalize": {"module.prop:name and webroot module name": placeholder_name.decode()},
+                                "context": "manifest fields except hash/content_sha256/hash_kind/hash_scope",
+                                "webui_asset_names": "retained from placeholder-name Vite build"})
     entries["r1-build.json"] = ((json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode(), 0o644)
-    for name, expected in native.items():
-        if sha256(entries[name][0]) != expected:
-            raise ValueError(f"Upstream native binary changed: {name}")
     return stem + ".zip", add_checksums(entries), manifest
+
+
+def finalize_skroot_variant(payload: EntryMap, *, loader: bytes, worker: bytes,
+                            variant: str, module_manifest: dict) -> tuple[str, EntryMap, dict]:
+    """Wrap a finalized module without changing its version, name or hash."""
+    validate_helper(loader)
+    validate_helper(worker)
+    check_tree(payload)
+    if (variant not in VARIANTS or module_manifest.get("variant") != variant
+            or module_manifest.get("version") != f"{BRAND}-{variant}"
+            or not module_manifest.get("native_rebuilt")):
+        raise ValueError("SKRootPro requires a matching finalized source-built payload")
+    digest = module_manifest.get("hash", "")
+    if not re.fullmatch(r"[0-9a-f]{7}", digest):
+        raise ValueError("SKRootPro payload content hash must contain seven hexadecimal digits")
+    for name, (data, _) in payload.items():
+        if not name.endswith(".sha256"):
+            if payload.get(name + ".sha256", (None,))[0] != sha256(data).encode():
+                raise ValueError(f"SKRootPro payload checksum is missing or stale: {name}")
+    manifest = {"schema": 1, "id32": SKROOT_ID32, "version": f"{BRAND}-{variant}",
+                "variant": variant,
+                "files": [{"path": name, "mode": mode, "sha256": sha256(data)}
+                          for name, (data, mode) in sorted(payload.items())]}
+    entries = {"payload/" + name: entry for name, entry in payload.items()}
+    entries.update({"libomk_skroot_loader.so": (loader, 0o755),
+                    "skroot/omk-skroot-worker": (worker, 0o755),
+                    "omk-payload.json": ((json.dumps(manifest, sort_keys=True, indent=2) + "\n").encode(), 0o644)})
+    transport_digest = content_digest(entries, {})
+    build_info = {
+        "schema": 1, "id32": SKROOT_ID32, "version": f"{BRAND}-{variant}",
+        "variant": variant, "hash": digest, "module_content_sha256": module_manifest["content_sha256"],
+        "native_rebuilt": True, "features": module_manifest["features"],
+        "source": module_manifest["source"], "target": "aarch64-linux-android",
+        "transport_content_sha256": transport_digest,
+        "transport_hash_scope": "sorted path/mode/bytes including payload sidecars, before skroot-build.json and transport checksum sidecars; empty context",
+        "filename_hash_scope": "standard module's normalized content hash; payload module/UI names unchanged",
+        "loader_sha256": sha256(loader), "worker_sha256": sha256(worker),
+        "validation": {"on_device": "pending", "android_linkage": "pending",
+                       "skrootpro_loading": "pending", "policy_preflight": "pending"},
+    }
+    entries["skroot-build.json"] = ((json.dumps(build_info, sort_keys=True, indent=2) + "\n").encode(), 0o644)
+    for name in ("libomk_skroot_loader.so", "skroot/omk-skroot-worker", "omk-payload.json", "skroot-build.json"):
+        entries[name + ".sha256"] = (sha256(entries[name][0]).encode(), 0o644)
+    check_tree(entries)
+    return module_name(variant, digest) + ".zip", entries, build_info
 
 
 def write_zip(path: Path, entries: EntryMap) -> None:
     check_tree(entries)
-    # Exclusive creation preserves all earlier output, including partial runs.
+    # Exclusive creation preserves user archives and outputs of previous runs.
     with path.open("xb") as stream:
-        with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
             for name, (data, mode) in sorted(entries.items()):
-                info = zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0))
+                info = zipfile.ZipInfo(name, date_time=ZIP_TIMESTAMP)
                 info.create_system = 3
                 info.external_attr = (stat.S_IFREG | mode) << 16
                 info.compress_type = zipfile.ZIP_DEFLATED
-                archive.writestr(info, data)
+                archive.writestr(info, data, compresslevel=9)
 
 
-def package(base_zip: Path, helper_path: Path, webroot_root: Path, output: Path) -> None:
-    if output.exists() or output.is_symlink():
-        raise FileExistsError("Output already exists; select a new output directory")
-    if not output.parent.is_dir():
-        raise ValueError("Output parent must be an existing directory")
-    check_disk(output.parent, entry=True)
-    base = load_base(base_zip)
-    check_disk(output.parent)
-    helper = read_input(helper_path)
-    validate_helper(helper)
-    service = read_input(ROOT / "template/service.sh")
-    packager_digest = sha256(read_input(Path(__file__)))
-    # Sequential variants bound peak memory; no extracted staging tree is created.
-    output.mkdir()
-    sums = []
-    manifests = {}
-    for variant in VARIANTS:
-        check_disk(output)
-        webroot = load_webroot(webroot_root / variant)
-        name, entries, manifest = make_variant(base, helper, webroot, variant, service, packager_digest)
-        check_disk(output)
-        write_zip(output / name, entries)
-        check_disk(output)
-        sums.append(f"{file_digest(output / name)}  {name}\n")
-        manifests[name] = manifest
-        del entries, webroot
-    with (output / "manifest.json").open("x", encoding="utf-8") as stream:
-        json.dump(manifests, stream, sort_keys=True, indent=2)
-        stream.write("\n")
-    with (output / "SHA256SUMS").open("x", encoding="ascii") as stream:
-        stream.write("".join(sums))
-    check_disk(output)
+def write_zip_or_reuse(path: Path, entries: EntryMap) -> bool:
+    """Reuse only byte-identical deterministic output; never replace a prior ZIP."""
+    check_tree(entries)
+    try:
+        write_zip(path, entries)
+        return False
+    except FileExistsError:
+        if path.is_symlink() or not path.is_file():
+            raise FileExistsError(f"Existing output is not a regular ZIP: {path}") from None
+    # A temporary deterministic ZIP compares compressed bytes, timestamps and modes,
+    # rather than accepting a merely equivalent archive with different metadata.
+    with tempfile.TemporaryDirectory(prefix=".r1-compare-", dir=path.parent) as directory:
+        candidate = Path(directory) / path.name
+        write_zip(candidate, entries)
+        with path.open("rb") as previous, candidate.open("rb") as proposed:
+            while True:
+                old_chunk, new_chunk = previous.read(1024 * 1024), proposed.read(1024 * 1024)
+                if old_chunk != new_chunk:
+                    raise FileExistsError(f"Existing output differs; kept unchanged: {path}")
+                if not old_chunk:
+                    return True
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-zip", required=True, type=Path)
-    parser.add_argument("--helper", required=True, type=Path)
-    parser.add_argument("--webroot-root", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    args = parser.parse_args()
-    try:
-        package(args.base_zip, args.helper, args.webroot_root, args.output)
-    except (OSError, ValueError, RuntimeError, zipfile.BadZipFile) as error:
-        print(f"R1 packaging stopped: {error}", file=sys.stderr)
-        return 1
+    # There is one source-build CLI: no --base-zip or precompiled native path.
+    os.execv(sys.executable, [sys.executable, os.fspath(ROOT / "build.py"), *sys.argv[1:]])
     return 0
 
 

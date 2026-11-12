@@ -1,7 +1,15 @@
+#!/system/bin/sh
+
 MODDIR=${0%/*}
 STATE_DIR=/data/adb/omk
 
 mkdir -p "$STATE_DIR"
+
+# KernelSU late-load omits post-fs-data. Initialize the same module-local
+# assets before starting daemons when that documented stage was skipped.
+if [ "${KSU_LATE_LOAD:-}" = 1 ] || [ ! -d /data/misc/keystore/omk/data ]; then
+  sh "$MODDIR/post-fs-data.sh" || exit 1
+fi
 
 pid_matches_script() {
   pid=$1
@@ -38,69 +46,90 @@ start_daemon() {
 if [ -f "$MODDIR/r1-build.json" ]; then
   R1_HELPER="$MODDIR/arm64-v8a/r1-helper"
   [ -x "$R1_HELPER" ] || { echo "[R1] missing executable helper" >&2; exit 1; }
-  if [ -f "$MODDIR/r1-no-soter" ]; then
-    # Native API changes only enabled, preserving identities and application settings.
-    LD_LIBRARY_PATH="/system/lib64:/apex/com.android.runtime/lib64:/apex/com.android.runtime/lib64/bionic:/vendor/lib64:$LD_LIBRARY_PATH" \
-      "$MODDIR/libs/arm64-v8a/keymint" --webui-set-soter-local-base64 \
-      eyJhY3Rpb24iOiJlbmFibGVkIiwiZW5hYmxlZCI6ZmFsc2V9 >/dev/null || {
-      echo "[R1] Soter disable failed; daemon startup stopped" >&2
-      exit 1
-    }
-  fi
   "$R1_HELPER" monitor &
 fi
 # END R1 BOOT HOOK
 
 start_daemon "$MODDIR/daemon" "$STATE_DIR/keymint-daemon.pid"
 start_daemon "$MODDIR/daemon-injector" "$STATE_DIR/injector-daemon.pid"
-# Resolve the active root implementation's resetprop binary.
-RESETPROP_BIN="$(command -v resetprop 2>/dev/null)"
-if [ -z "$RESETPROP_BIN" ]; then
-  if [ -x /data/adb/ksu/bin/resetprop ]; then
-    RESETPROP_BIN=/data/adb/ksu/bin/resetprop
-  elif [ -x /data/adb/magisk/resetprop ]; then
-    RESETPROP_BIN=/data/adb/magisk/resetprop
+# Legacy property adjustments use a verified resetprop interface supplied by
+# the manager. The Rust date path independently resolves the same capability.
+RESETPROP_BIN=
+RESETPROP_PREFIX=
+probe_resetprop() {
+  candidate=$1
+  prefix=$2
+  [ -x "$candidate" ] || return 1
+  expected=$(getprop ro.build.version.sdk 2>/dev/null)
+  [ -n "$expected" ] || return 1
+  if [ -n "$prefix" ]; then
+    actual=$("$candidate" "$prefix" -n ro.build.version.sdk 2>/dev/null) || return 1
+  else
+    actual=$("$candidate" -n ro.build.version.sdk 2>/dev/null) || return 1
   fi
+  [ "$actual" = "$expected" ] || return 1
+  RESETPROP_BIN=$candidate
+  RESETPROP_PREFIX=$prefix
+}
+for candidate in /data/adb/ksu/bin/resetprop /data/adb/magisk/resetprop \
+  /data/adb/ap/bin/resetprop
+do
+  probe_resetprop "$candidate" "" && break
+done
+if [ -z "$RESETPROP_BIN" ]; then
+  probe_resetprop /data/adb/ksud resetprop || probe_resetprop /data/adb/apd resetprop || true
 fi
+if [ -z "$RESETPROP_BIN" ]; then
+  candidate=$(command -v resetprop 2>/dev/null)
+  [ -z "$candidate" ] || probe_resetprop "$candidate" ""
+fi
+reset_prop() {
+  [ -n "$RESETPROP_BIN" ] || return 1
+  if [ -n "$RESETPROP_PREFIX" ]; then
+    "$RESETPROP_BIN" "$RESETPROP_PREFIX" "$@"
+  else
+    "$RESETPROP_BIN" "$@"
+  fi
+}
 
 check_reset_prop() {
   local NAME="$1"
   local EXPECTED="$2"
   local VALUE
-  VALUE=$("$RESETPROP_BIN" "$NAME")
-  [ -z "$VALUE" ] || [ "$VALUE" = "$EXPECTED" ] || "$RESETPROP_BIN" "$NAME" "$EXPECTED"
+  VALUE=$(reset_prop "$NAME")
+  [ -z "$VALUE" ] || [ "$VALUE" = "$EXPECTED" ] || reset_prop "$NAME" "$EXPECTED"
 }
 
 check_missing_prop() {
   local NAME="$1"
   local EXPECTED="$2"
   local VALUE
-  VALUE=$("$RESETPROP_BIN" "$NAME")
-  [ -z "$VALUE" ] && "$RESETPROP_BIN" "$NAME" "$EXPECTED"
+  VALUE=$(reset_prop "$NAME")
+  [ -z "$VALUE" ] && reset_prop "$NAME" "$EXPECTED"
 }
 
 check_missing_match_prop() {
   local NAME="$1"
   local EXPECTED="$2"
   local VALUE
-  VALUE=$("$RESETPROP_BIN" "$NAME")
-  [ -z "$VALUE" ] || [ "$VALUE" = "$EXPECTED" ] || "$RESETPROP_BIN" "$NAME" "$EXPECTED"
-  [ -z "$VALUE" ] && "$RESETPROP_BIN" "$NAME" "$EXPECTED"
+  VALUE=$(reset_prop "$NAME")
+  [ -z "$VALUE" ] || [ "$VALUE" = "$EXPECTED" ] || reset_prop "$NAME" "$EXPECTED"
+  [ -z "$VALUE" ] && reset_prop "$NAME" "$EXPECTED"
 }
 
 contains_reset_prop() {
   local NAME="$1"
   local CONTAINS="$2"
   local NEWVAL="$3"
-  case "$("$RESETPROP_BIN" "$NAME")" in
-    *"$CONTAINS"*) "$RESETPROP_BIN" "$NAME" "$NEWVAL" ;;
+  case "$(reset_prop "$NAME")" in
+    *"$CONTAINS"*) reset_prop "$NAME" "$NEWVAL" ;;
   esac
 }
 
 sleep 20
 
 if [ -n "$RESETPROP_BIN" ]; then
-  "$RESETPROP_BIN" -w sys.boot_completed 0
+  reset_prop -w sys.boot_completed 0
   check_missing_prop "ro.boot.vbmeta.invalidate_on_error" "yes"
   check_reset_prop "ro.boot.vbmeta.avb_version" "1.2"
   check_reset_prop "ro.boot.vbmeta.hash_alg" "sha256"
@@ -128,7 +157,7 @@ if [ -n "$RESETPROP_BIN" ]; then
   check_reset_prop "ro.crypto.state" "encrypted"
 
   # Hide adb debugging traces.
-  "$RESETPROP_BIN" "sys.usb.adb.disabled" " "
+  reset_prop "sys.usb.adb.disabled" " "
   # Hide recovery boot mode.
   contains_reset_prop "ro.bootmode" "recovery" "unknown"
   contains_reset_prop "ro.boot.bootmode" "recovery" "unknown"
@@ -142,6 +171,6 @@ setprop persist.logd.size.system ""
 setprop persist.logd.size.main ""
 
 # Hide cloudphone detection.
-if [ -n "$RESETPROP_BIN" ] && [ -n "$("$RESETPROP_BIN" ro.kernel.qemu)" ]; then
-  "$RESETPROP_BIN" ro.kernel.qemu ""
+if [ -n "$RESETPROP_BIN" ] && [ -n "$(reset_prop ro.kernel.qemu)" ]; then
+  reset_prop ro.kernel.qemu ""
 fi

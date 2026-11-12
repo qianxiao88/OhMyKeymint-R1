@@ -31,7 +31,7 @@ where
 
     rows.next()
         .context("In with_rows_extract_one: Failed to unpack unexpected row.")?
-        .map_or_else(|| Ok(()), |_| Err(KsError::sys()))
+        .map_or(Ok(()), |_| Err(KsError::sys()))
         .context("In with_rows_extract_one: Unexpected row.")?;
 
     result

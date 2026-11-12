@@ -1,13 +1,7 @@
 #!/system/bin/sh
 
-# KernelSU runs this script before removing the module directory. Keep the
-# cleanup limited to OMK's two persistent roots; disabling a module must not
-# remove data.
-case "${KSU:-}" in
-  true|1) ;;
-  *) exit 0 ;;
-esac
-
+# The manager calls this hook only when removing the module. Use the same
+# bounded cleanup for KernelSU, APatch and Magisk; disable/update do not call it.
 remove_omk_directory() {
   target="$1"
   case "$target" in

@@ -369,6 +369,7 @@ impl Drop for BinderIoctlGuard {
         drop(state);
         drop(registry);
         if let Some(connection) = retired {
+            #[cfg(feature = "soter")]
             if crate::hook::soter::enabled() {
                 crate::hook::soter::retire_connection(connection);
             }

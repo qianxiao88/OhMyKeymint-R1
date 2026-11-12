@@ -1,4 +1,4 @@
-# Oh My Keymint（第三方版本）
+# OhMyKeymint-R1 1.3.8-302（第三方版本）
 
 > 本仓库是基于 [qwq233/OhMyKeymint](https://github.com/qwq233/OhMyKeymint) 修改的第三方版本，**不是官方版本，也不代表上游维护者**。本版本的问题请反馈至[本仓库](https://github.com/ITxiao6666/OhMyKeymint/issues)。
 
@@ -6,9 +6,9 @@
 
 ## 安装与使用
 
-需要 **Android 12 及以上**，以及 KernelSU 或 Magisk。
+面向 **Android 12–17、ARM64**。标准 ZIP 使用 KernelSU、APatch 或 Magisk 的模块接口；SKRootPro 使用单独的原生加载格式，安装入口、运行前提与验证范围见[管理器适配](docs/ROOT_MANAGER_COMPATIBILITY.md)和 [SKRootPro 说明](docs/SKROOTPRO.md)。
 
-1. 从本仓库的 [Releases](https://github.com/ITxiao6666/OhMyKeymint/releases) 下载并安装模块。
+1. 选择本仓库构建的 `full`、`no-soter` 或 `lite` 安装包，通过对应管理器安装并重启。三个版本使用相同模块 ID，同一时间选择其中一版。
 2. 打开 WebUI，选择需要使用 OMK 的应用，按需导入 Keybox。
 3. 高级设置及生效条件请参阅[配置指南](docs/CONFIGURATION.md)。
 
@@ -19,9 +19,19 @@ Zygisk 相关功能需另行安装并启用 Zygisk Next。
 
 - 应用包名、多用户及应用独立安全补丁配置。
 - RSA / EC Keybox 导入与证书链信息查看。
-- 安全补丁同步与恢复、Pixel PIF 配置及本机 RKP Keybox 签发
-- 运行状态诊断、主题与语言设置。
+- 手动安全补丁设置、已保存配置重放与默认值恢复。
+- 云端 Keybox 自动检测、条件下载、SHA-256 校验、原生验证导入与热重载；断网指数退避。
+- 使用原 Pixel `bot` feed 的 PIF 适配，固定仅 Play Store Build，以及本机 RKP Keybox 签发。
+- 运行状态诊断、主题与语言设置；模块描述按核心服务与云端连接结果更新，并显示版本、末七位哈希或具体失败原因。
 - SOTER 本地随机身份、按应用选择与 32/36 位 CPU-ID 覆盖。
+
+| 版本 | 发货功能 |
+| --- | --- |
+| `full` 完整版 | 核心、自动云端 Keybox、补丁日期、GMS 缓存、应用列表、壁纸、PIF、RKP、SOTER 与全部设置 |
+| `no-soter` 去 SOTER 版 | 完整版功能中移除 SOTER 原生实现、入口、监视器和专用权限 |
+| `lite` 精简版 | 核心、自动云端 Keybox、补丁日期设置与恢复、GMS 缓存清理、包名添加、背景壁纸 |
+
+精简版按 Rust 编译特性裁剪，包内无 PIF Zygisk、工程显示桥、RKP 签发或 SOTER 实现；界面入口与发货脚本同步裁剪。
 
 Keybox 至少需要一个完整的 RSA 或 EC 条目，私钥必须与证书链匹配。
 仅含 EC 条目时，RSA 密钥的认证证书也使用该 EC 私钥和证书链签名。

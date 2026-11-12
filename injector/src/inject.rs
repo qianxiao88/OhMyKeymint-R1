@@ -69,14 +69,23 @@ fn persist_remote_payload_state(pid: Pid, payload_identifier: &str) -> Result<()
 }
 
 pub fn inject_library(pid: Pid) -> Result<()> {
-    inject_role(pid, None)
+    #[cfg(feature = "soter")]
+    {
+        inject_role(pid, None)
+    }
+    #[cfg(not(feature = "soter"))]
+    {
+        inject_role(pid)
+    }
 }
 
+#[cfg(feature = "soter")]
 pub fn inject_soter(pid: Pid, channels: [i32; 2]) -> Result<()> {
     inject_role(pid, Some(channels))
 }
 
-fn inject_role(pid: Pid, channels: Option<[i32; 2]>) -> Result<()> {
+fn inject_role(pid: Pid, #[cfg(feature = "soter")] channels: Option<[i32; 2]>) -> Result<()> {
+    #[cfg(feature = "soter")]
     let soter_identity = if channels.is_some() {
         Some(
             crate::soter_watch::identity(pid.as_raw())
@@ -117,6 +126,7 @@ fn inject_role(pid: Pid, channels: Option<[i32; 2]>) -> Result<()> {
     };
 
     // Run actual injection; regardless of success/failure we MUST restore regs and detach
+    #[cfg(feature = "soter")]
     let result = if soter_identity.as_ref().is_some_and(|expected| {
         crate::soter_watch::identity(pid.as_raw()).as_ref() != Some(expected)
     }) {
@@ -129,6 +139,8 @@ fn inject_role(pid: Pid, channels: Option<[i32; 2]>) -> Result<()> {
     } else {
         do_inject(pid, &self_path, channels)
     };
+    #[cfg(not(feature = "soter"))]
+    let result = do_inject(pid, &self_path);
 
     // === CLEANUP: Always restore registers and detach ===
     debug!("restoring registers and detaching");
@@ -145,14 +157,26 @@ fn inject_role(pid: Pid, channels: Option<[i32; 2]>) -> Result<()> {
     finish_injection_result(result, cleanup_errors)
 }
 
-fn do_inject(pid: Pid, self_path: &std::path::Path, channels: Option<[i32; 2]>) -> Result<()> {
+fn do_inject(
+    pid: Pid,
+    self_path: &std::path::Path,
+    #[cfg(feature = "soter")] channels: Option<[i32; 2]>,
+) -> Result<()> {
     // A stable in-memory loader name permits a restarted root broker to
     // reconnect to the same payload instead of installing nested PLT hooks.
+    #[cfg(feature = "soter")]
     let payload_identifier = if channels.is_some() {
         "libomk_soter_hal.so".to_string()
     } else {
         generate_remote_payload_identifier().context("failed to generate payload identifier")?
     };
+    #[cfg(not(feature = "soter"))]
+    let payload_identifier =
+        generate_remote_payload_identifier().context("failed to generate payload identifier")?;
+    #[cfg(feature = "soter")]
+    let standard_role = channels.is_none();
+    #[cfg(not(feature = "soter"))]
+    let standard_role = true;
     log_loader_abi();
     info!(
         "starting injection build_id={} pid={} payload={} self_path={}",
@@ -301,7 +325,7 @@ fn do_inject(pid: Pid, self_path: &std::path::Path, channels: Option<[i32; 2]>) 
         payload_identifier,
         utils::sha256_file(self_path).unwrap_or_else(|_| "<unavailable>".to_string())
     );
-    if channels.is_none() {
+    if standard_role {
         if let Err(error) = selinux::set_sockcreate_con("u:object_r:system_file:s0") {
             warn!("sockcreate context setup failed: {error:#}");
         }
@@ -394,8 +418,11 @@ fn do_inject(pid: Pid, self_path: &std::path::Path, channels: Option<[i32; 2]>) 
     if let Some(err_fn) = dlerror_addr {
         let _ = sys::remote_call(pid, err_fn, libc_return_addr, &[]);
     }
-    let entry_symbol =
-        std::ffi::CString::new(if channels.is_some() { "soter_entry" } else { "entry" })?;
+    #[cfg(feature = "soter")]
+    let entry_name = if channels.is_some() { "soter_entry" } else { "entry" };
+    #[cfg(not(feature = "soter"))]
+    let entry_name = "entry";
+    let entry_symbol = std::ffi::CString::new(entry_name)?;
     let remote_entry_symbol_ptr = push_to_remote_stack(entry_symbol.as_bytes_with_nul())?;
     let injector_entry =
         sys::remote_call(pid, dlsym_addr, libc_return_addr, &[handle, remote_entry_symbol_ptr])?;
@@ -407,7 +434,11 @@ fn do_inject(pid: Pid, self_path: &std::path::Path, channels: Option<[i32; 2]>) 
     }
     debug!("resolved remote entry via dlsym address=0x{:x}", injector_entry);
 
+    #[cfg(feature = "soter")]
     let mut entry_args = vec![handle];
+    #[cfg(not(feature = "soter"))]
+    let entry_args = [handle];
+    #[cfg(feature = "soter")]
     if let Some(channels) = channels {
         for fd in channels {
             match send_fd_to_remote(
@@ -435,10 +466,8 @@ fn do_inject(pid: Pid, self_path: &std::path::Path, channels: Option<[i32; 2]>) 
         bail!("Remote entry returned false");
     }
 
-    if let Err(error) = channels
-        .is_none()
-        .then(|| persist_remote_payload_state(pid, &payload_identifier))
-        .transpose()
+    if let Err(error) =
+        standard_role.then(|| persist_remote_payload_state(pid, &payload_identifier)).transpose()
     {
         warn!("failed to persist payload identifier state for pid {}: {:#}", pid, error);
     }

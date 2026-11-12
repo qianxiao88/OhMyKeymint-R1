@@ -97,9 +97,9 @@ pub fn fingerprint_state() -> Result<String> {
 
 pub fn apply_fingerprint(
     product: &str,
-    spoof_build: bool,
-    spoof_props: bool,
-    spoof_vending_build: bool,
+    _spoof_build: bool,
+    _spoof_props: bool,
+    _spoof_vending_build: bool,
 ) -> Result<String> {
     validate_product(product).map_err(anyhow::Error::msg)?;
     let catalog = download_catalog()?;
@@ -112,9 +112,8 @@ pub fn apply_fingerprint(
     let mut profile = PifProfile::from_source(selected, contents.as_bytes())
         .map_err(anyhow::Error::msg)
         .context("downloaded PIF profile failed validation")?;
-    profile.spoof_build = spoof_build;
-    profile.spoof_props = spoof_props;
-    profile.spoof_vending_build = spoof_vending_build;
+    // Legacy CLI switches remain accepted, but the product uses Store Build only.
+    profile.enforce_store_only();
 
     let path = Path::new(PROFILE_PATH);
     let _lock = security_patch::acquire_data_operation_lock(path)?;
@@ -203,9 +202,9 @@ fn state_json(profile: Option<&PifProfile>) -> Result<String> {
                 fingerprint: &profile.fingerprint,
                 security_patch: &profile.security_patch,
                 device_initial_sdk_int: profile.initial_sdk_int(),
-                spoof_build: profile.spoof_build,
-                spoof_props: profile.spoof_props,
-                spoof_vending_build: profile.spoof_vending_build,
+                spoof_build: false,
+                spoof_props: false,
+                spoof_vending_build: true,
             })
         }
         None => serde_json::to_string(&DisabledState { enabled: false }),
@@ -230,15 +229,13 @@ fn load_profile(path: &Path) -> Result<Option<PifProfile>> {
     }
     let contents =
         fs::read(path).with_context(|| format!("failed to read PIF profile {}", path.display()))?;
-    let profile = PifProfile::from_json(&contents).map_err(anyhow::Error::msg)?;
-    let canonical = profile.to_canonical_json().map_err(anyhow::Error::msg)?;
-    if contents != canonical.as_bytes() {
-        bail!("PIF profile is not canonical JSON");
-    }
-    Ok(Some(profile))
+    PifProfile::from_canonical_json(&contents).map(Some).map_err(anyhow::Error::msg)
 }
 
 fn persist_profile(path: &Path, profile: &PifProfile, uid: u32, gid: u32) -> Result<()> {
+    profile.validate().map_err(anyhow::Error::msg)?;
+    let mut profile = profile.clone();
+    profile.enforce_store_only();
     let contents = profile.to_canonical_json().map_err(anyhow::Error::msg)?;
     validate_profile_target(path)?;
     atomic_replace_preserving_metadata(path, contents.as_bytes(), 0o600, uid, gid)
@@ -246,7 +243,7 @@ fn persist_profile(path: &Path, profile: &PifProfile, uid: u32, gid: u32) -> Res
     validate_profile_target(path)?;
     enforce_profile_metadata(path, uid, gid)?;
     let saved = load_profile(path)?.ok_or_else(|| anyhow!("PIF profile vanished after write"))?;
-    if &saved != profile {
+    if saved != profile {
         bail!("PIF profile read-back does not match the requested profile");
     }
     Ok(())
@@ -373,12 +370,12 @@ mod tests {
         assert_eq!(state_json(None).unwrap(), r#"{"enabled":false}"#);
         assert_eq!(
             state_json(Some(&profile)).unwrap(),
-            r#"{"enabled":true,"model":"Pixel 6","product":"oriole_beta","fingerprint":"google/oriole_beta/oriole:CANARY/ZP11.260717.006/16004061:user/release-keys","security_patch":"2026-08-05","device_initial_sdk_int":32,"spoof_build":true,"spoof_props":true,"spoof_vending_build":false}"#
+            r#"{"enabled":true,"model":"Pixel 6","product":"oriole_beta","fingerprint":"google/oriole_beta/oriole:CANARY/ZP11.260717.006/16004061:user/release-keys","security_patch":"2026-08-05","device_initial_sdk_int":32,"spoof_build":false,"spoof_props":false,"spoof_vending_build":true}"#
         );
     }
 
     #[test]
-    fn state_json_preserves_all_three_independent_switches() {
+    fn state_json_reports_only_fixed_store_build_scope() {
         for build in [false, true] {
             for props in [false, true] {
                 for vending in [false, true] {
@@ -388,9 +385,9 @@ mod tests {
                     profile.spoof_vending_build = vending;
                     let value: serde_json::Value =
                         serde_json::from_str(&state_json(Some(&profile)).unwrap()).unwrap();
-                    assert_eq!(value["spoof_build"], build);
-                    assert_eq!(value["spoof_props"], props);
-                    assert_eq!(value["spoof_vending_build"], vending);
+                    assert_eq!(value["spoof_build"], false);
+                    assert_eq!(value["spoof_props"], false);
+                    assert_eq!(value["spoof_vending_build"], true);
                     assert!(value.get("spoof_vending_fingerprint").is_none());
                 }
             }
@@ -415,6 +412,56 @@ mod tests {
         assert_eq!(metadata.mode() & 0o777, 0o600);
         assert_eq!(metadata.uid(), uid);
         assert_eq!(metadata.gid(), gid);
+    }
+
+    #[test]
+    fn explicit_apply_replaces_unsupported_or_invalid_saved_profile() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pif_fingerprint.json");
+        let profile = sample_profile();
+        let unsupported =
+            profile.to_canonical_json().unwrap().replacen("\"version\":2", "\"version\":3", 1);
+        for original in [unsupported.as_bytes(), b"invalid profile".as_slice()] {
+            fs::write(&path, original).unwrap();
+            assert!(load_profile(&path).is_err());
+            assert_eq!(fs::read(&path).unwrap(), original);
+            persist_profile(&path, &profile, unsafe { libc::geteuid() }, unsafe {
+                libc::getegid()
+            })
+            .unwrap();
+            assert_eq!(load_profile(&path).unwrap(), Some(profile.clone()));
+        }
+    }
+
+    #[test]
+    fn explicit_disable_removes_unsupported_saved_profile_without_parsing() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pif_fingerprint.json");
+        fs::write(&path, br#"{"version":3}"#).unwrap();
+        assert!(load_profile(&path).is_err());
+        remove_profile(&path).unwrap();
+        assert!(!path.exists());
+        assert_eq!(load_profile(&path).unwrap(), None);
+        remove_profile(&path).unwrap();
+    }
+
+    #[test]
+    fn loader_normalizes_saved_gms_profiles_without_rewriting_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("pif_fingerprint.json");
+        for version in [1, 2] {
+            let mut legacy = sample_profile();
+            legacy.version = version;
+            legacy.spoof_build = true;
+            legacy.spoof_props = true;
+            legacy.spoof_vending_build = false;
+            let original = legacy.to_canonical_json().unwrap();
+            fs::write(&path, &original).unwrap();
+            let loaded = load_profile(&path).unwrap().unwrap();
+            assert!(!loaded.spoof_build && !loaded.spoof_props);
+            assert!(loaded.spoof_vending_build);
+            assert_eq!(fs::read(&path).unwrap(), original.as_bytes());
+        }
     }
 
     #[test]

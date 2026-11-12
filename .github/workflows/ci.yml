@@ -113,7 +113,8 @@ jobs:
 
     - name: Install Android build dependencies
       run: |
-        sdkmanager --install "ndk;30.0.16248370" "build-tools;35.0.0" --sdk_root="$ANDROID_SDK_ROOT"
+        sdkmanager --install "ndk;30.0.16248370" "build-tools;35.0.0" "cmake;4.1.2" --sdk_root="$ANDROID_SDK_ROOT"
+        echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/30.0.16248370" >> "$GITHUB_ENV"
         sudo apt-get update
         sudo apt-get install -y protobuf-compiler
 
@@ -140,17 +141,30 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all -- --check
 
-    - name: Check Clippy
-      run: cargo clippy --target aarch64-linux-android --workspace --all-targets -- -D warnings
+    - name: Check Android variants and standalone workspaces
+      run: |
+        cargo clippy --target aarch64-linux-android --workspace --all-targets -- -D warnings
+        cargo test --target aarch64-linux-android --workspace --no-run
+        for gate in clippy test; do
+          if [ "$gate" = clippy ]; then extra=(--all-targets -- -D warnings); else extra=(--no-run); fi
+          cargo "$gate" --target aarch64-linux-android -p OhMyKeymint --no-default-features --features pif,local-rkp "${extra[@]}"
+          cargo "$gate" --target aarch64-linux-android -p OhMyKeymint --no-default-features "${extra[@]}"
+          cargo "$gate" --target aarch64-linux-android -p injector --no-default-features "${extra[@]}"
+          for manifest in tools/r1-runtime/Cargo.toml tools/skroot-loader/Cargo.toml; do
+            cargo "$gate" --manifest-path "$manifest" --target aarch64-linux-android "${extra[@]}"
+          done
+        done
 
     - name: Check dependencies
       run: cargo deny --workspace check
 
   setup-and-build:
+    name: Package R1 (${{ matrix.build-type }})
     runs-on: ubuntu-latest
     needs:
       - build-boringssl
     permissions:
+      contents: read
       id-token: write
       attestations: write
     strategy:
@@ -177,20 +191,15 @@ jobs:
         cache: pnpm
         cache-dependency-path: webui/pnpm-lock.yaml
 
-    - name: Build WebUI
+    - name: Install and test WebUI
       run: |
         pnpm --dir webui install --frozen-lockfile
-        pnpm --dir webui build
+        pnpm --dir webui test
 
-    - name: Verify committed WebUI build
+    - name: Test source packaging
       run: |
-        webroot_status="$(git status --porcelain=v1 --untracked-files=all -- template/webroot)"
-        if ! git diff --exit-code -- template/webroot || [ -n "$webroot_status" ]; then
-          git status --short --untracked-files=all -- template/webroot
-          git diff -- template/webroot
-          echo "template/webroot does not match the reproducible WebUI build" >&2
-          exit 1
-        fi
+        python -m unittest discover -s tests -p 'test_*.py'
+        python -m unittest discover -s scripts -p test_build_r1.py
 
     - name: Install Rust toolchain
       uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -216,6 +225,8 @@ jobs:
       run: |
         echo "y" | sdkmanager --install "ndk;30.0.16248370" --sdk_root=${ANDROID_SDK_ROOT} &> /dev/null
         echo "y" | sdkmanager --install "build-tools;35.0.0" --sdk_root=${ANDROID_SDK_ROOT} &> /dev/null
+        echo "y" | sdkmanager --install "cmake;4.1.2" --sdk_root=${ANDROID_SDK_ROOT} &> /dev/null
+        echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/30.0.16248370" >> "$GITHUB_ENV"
     - name: Install protoc
       run: |
         sudo apt-get update
@@ -246,27 +257,67 @@ jobs:
         python -m pip install --upgrade pip
         pip install toml
 
-    - name: Build OhMyKeymint
-      id: prepareArtifact
+    - name: Build three source variants and SKRootPro transports
       env:
         BORINGSSL_BUILD_DIR: ${{ github.workspace }}/boringssl/build
       run: |
         unset RUSTFLAGS
-        python build.py --${{ matrix.build-type }}
-        name=`ls target/OhMyKeymint-* | awk -F '(/|.zip)' '{print $2}'` && echo "releaseName=$name" >> $GITHUB_OUTPUT
-        unzip target/OhMyKeymint-*.zip -d module-${{ matrix.build-type }}
+        python build.py --${{ matrix.build-type }} --variant all --output target/packages
+
+    - name: Summarize packaged outputs
+      env:
+        BUILD_TYPE: ${{ matrix.build-type }}
+      run: |
+        python - <<'PY'
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+        import zipfile
+
+        output = Path("target/packages")
+        packages = sorted(output.glob("*.zip")) + sorted((output / "skrootpro").glob("*.zip"))
+        if len(packages) != 6:
+            raise SystemExit(f"Expected six source-built ZIPs, found {len(packages)}")
+        summaries, sums = {}, []
+        for package in packages:
+            with package.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            relative = package.relative_to(output).as_posix()
+            expected = f"{digest}  {package.name}\n"
+            if package.with_suffix(".zip.sha256").read_text(encoding="ascii") != expected:
+                raise SystemExit(f"ZIP sidecar mismatch: {relative}")
+            with zipfile.ZipFile(package) as archive:
+                manifest = "skroot-build.json" if package.parent.name == "skrootpro" else "r1-build.json"
+                summaries[relative] = json.loads(archive.read(manifest))
+            sums.append(f"{digest}  {relative}\n")
+        (output / "SHA256SUMS").write_text("".join(sums), encoding="ascii")
+        (output / "build-summary.json").write_text(json.dumps(summaries, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        report = f"### R1 {os.environ['BUILD_TYPE']} packages\n\n" + "\n".join(f"- `{name}`" for name in summaries) + "\n"
+        (output / "build-summary.md").write_text(report, encoding="utf-8")
+        with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
+            stream.write(report)
+        PY
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v7
-      id: upload
       with:
-        name: ${{ steps.prepareArtifact.outputs.releaseName }}
-        path: "./module-${{ matrix.build-type }}/*"
+        name: OhMyKeymint-R1-${{ matrix.build-type }}-${{ github.sha }}
+        path: |
+          target/packages/*.zip
+          target/packages/*.zip.sha256
+          target/packages/skrootpro/*.zip
+          target/packages/skrootpro/*.zip.sha256
+          target/packages/SHA256SUMS
+          target/packages/build-summary.json
+          target/packages/build-summary.md
+        if-no-files-found: error
         retention-days: 90
 
-    - name: Attest release build provenance
+    - name: Attest release package provenance
       if: ${{ startsWith(github.ref, 'refs/tags/') && matrix.build-type == 'release' }}
       uses: actions/attest-build-provenance@v4
       with:
-        subject-name: ${{ steps.prepareArtifact.outputs.releaseName }}
-        subject-digest: sha256:${{ steps.upload.outputs.artifact-digest }}
+        subject-path: |
+          target/packages/*.zip
+          target/packages/skrootpro/*.zip

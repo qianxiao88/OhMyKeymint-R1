@@ -833,6 +833,10 @@ pub fn save_app_patch_levels_base64(payload: &str) -> Result<()> {
     if unsafe { libc::geteuid() } != 0 {
         bail!("saving app patch-level profiles requires root");
     }
+    // WebUI helpers run in separate processes. Serialize the entire read/modify/
+    // write with startup and global date transactions before taking the local
+    // CONFIG_FILE_WRITE_LOCK in the path-specific implementation.
+    let _operation = crate::security_patch::acquire_operation_lock()?;
     save_app_patch_levels_base64_to_path(Path::new(CONFIG_PATH), payload)
 }
 

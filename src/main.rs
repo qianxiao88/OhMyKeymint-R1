@@ -12,6 +12,7 @@ use kmr_common::rpc;
 use kmr_common::selinux::{clear_sockcreate_con, set_sockcreate_con};
 use log::{debug, error, info, warn, LevelFilter};
 use rsbinder::rpc::{PeerIdentity, RpcServer};
+use runtime_health::ServiceDiagnostic as WebUiServiceDiagnostic;
 use serde::Serialize;
 
 use crate::{
@@ -31,15 +32,21 @@ pub mod gms_cache;
 pub mod keybox;
 pub mod keymaster;
 pub mod keymint;
+#[cfg(feature = "local-rkp")]
 pub mod local_rkp;
+#[cfg(feature = "local-rkp")]
 pub mod local_rkp_artifacts;
 pub mod logging;
 pub mod macros;
+#[cfg(feature = "pif")]
 pub mod pif_spoof;
 pub mod plat;
 pub mod proto;
+#[cfg(feature = "local-rkp")]
 pub mod rkp_repair;
+#[cfg(feature = "local-rkp")]
 pub mod rkp_v1_bridge;
+mod runtime_health;
 pub mod security_patch;
 pub mod selinux;
 pub mod utils;
@@ -316,12 +323,6 @@ struct WebUiKeyboxInspector {
 }
 
 #[derive(Serialize)]
-struct WebUiServiceDiagnostic {
-    status: &'static str,
-    pid: Option<u32>,
-}
-
-#[derive(Serialize)]
 struct WebUiDiagnostics {
     keymint: WebUiServiceDiagnostic,
     keystore2: WebUiServiceDiagnostic,
@@ -411,16 +412,6 @@ fn process_pid(names: &[&str], expected_executable: Option<&Path>) -> Option<u32
     None
 }
 
-fn pidfile_process(path: &str, marker: &str) -> Option<u32> {
-    let pid = std::fs::read_to_string(path).ok()?.trim().parse::<u32>().ok()?;
-    if pid == std::process::id() {
-        return None;
-    }
-    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    let cmdline = String::from_utf8_lossy(&cmdline);
-    cmdline.contains(marker).then_some(pid)
-}
-
 fn service_diagnostic(status: &'static str, pid: Option<u32>) -> WebUiServiceDiagnostic {
     WebUiServiceDiagnostic { status, pid }
 }
@@ -465,25 +456,11 @@ fn selinux_diagnostic() -> &'static str {
 
 fn webui_diagnostics() -> String {
     use android::hardware::security::keymint::SecurityLevel::SecurityLevel;
-    // A vendor KeyMint process does not prove that OMK itself is running.
-    let executable = std::env::current_exe().ok();
-    let keymint_pid = executable.as_deref().and_then(|path| process_pid(&["keymint"], Some(path)));
-    let keystore_pid = process_pid(&["keystore2"], None);
-    let injector_pid = pidfile_process("/data/adb/omk/injector-daemon.pid", "daemon-injector")
-        .or_else(|| process_pid(&["inject"], None));
+    let health = runtime_health::get();
     serde_json::to_string(&WebUiDiagnostics {
-        keymint: service_diagnostic(
-            if keymint_pid.is_some() { "running" } else { "stopped" },
-            keymint_pid,
-        ),
-        keystore2: service_diagnostic(
-            if keystore_pid.is_some() { "running" } else { "stopped" },
-            keystore_pid,
-        ),
-        injector: service_diagnostic(
-            if injector_pid.is_some() { "running" } else { "stopped" },
-            injector_pid,
-        ),
+        keymint: health.keymint,
+        keystore2: health.keystore2,
+        injector: health.injector,
         tee: hardware_diagnostic(SecurityLevel::TRUSTED_ENVIRONMENT),
         strongbox: hardware_diagnostic(SecurityLevel::STRONGBOX),
         rkp_tee: rkp_diagnostic("default"),
@@ -569,6 +546,19 @@ fn handle_webui_diagnostics_command() -> Option<Result<String, String>> {
     let mut args = std::env::args();
     let _program = args.next();
     match args.next()?.as_str() {
+        "--webui-get-runtime-health" => {
+            if args.next().is_some() {
+                return Some(Err(
+                    "--webui-get-runtime-health does not accept arguments".to_string()
+                ));
+            }
+            // Only /proc and deployed-image metadata are read. In particular, this
+            // early command never initializes Binder, storage, hardware or RKP.
+            Some(
+                serde_json::to_string(&runtime_health::get())
+                    .map_err(|error| format!("failed to serialize runtime health: {error}")),
+            )
+        }
         "--webui-get-diagnostics" => {
             if args.next().is_some() {
                 return Some(Err("--webui-get-diagnostics does not accept arguments".to_string()));
@@ -677,6 +667,7 @@ fn handle_webui_security_bulletin_command() -> Option<Result<String, String>> {
     )
 }
 
+#[cfg(feature = "pif")]
 fn handle_webui_pif_command() -> Option<Result<String, String>> {
     let mut args = std::env::args();
     let _program = args.next();
@@ -709,12 +700,13 @@ fn handle_webui_pif_command() -> Option<Result<String, String>> {
             };
             let options: Vec<String> = args.collect();
             let (spoof_build, spoof_props, spoof_vending_build) = match options.as_slice() {
-                [] => (true, true, false),
+                [] => (false, false, true),
+                // Accept old UI flag shapes without restoring their GMS scope.
                 [build, props] if matches!(build.as_str(), "0" | "1")
-                    && matches!(props.as_str(), "0" | "1") => (build == "1", props == "1", false),
+                    && matches!(props.as_str(), "0" | "1") => (false, false, true),
                 [build, props, vending] if matches!(build.as_str(), "0" | "1")
                     && matches!(props.as_str(), "0" | "1")
-                    && matches!(vending.as_str(), "0" | "1") => (build == "1", props == "1", vending == "1"),
+                    && matches!(vending.as_str(), "0" | "1") => (false, false, true),
                 _ => return Some(Err(
                     "--webui-apply-pif-fingerprint accepts a product, optional spoofBuild spoofProps flags, and an optional spoofVendingBuild flag (0 or 1)".to_string(),
                 )),
@@ -819,6 +811,7 @@ fn handle_webui_maintenance_command(
             }
             Some(gms_cache::clear().map_err(|error| format!("{error:#}")))
         }
+        #[cfg(feature = "local-rkp")]
         "--webui-repair-rkp" => {
             if args.next().as_deref() != Some("--confirm-persistent-write") || args.next().is_some()
             {
@@ -834,6 +827,7 @@ fn handle_webui_maintenance_command(
     }
 }
 
+#[cfg(feature = "local-rkp")]
 fn handle_local_rkp_command(
     mut args: impl Iterator<Item = String>,
 ) -> Option<Result<String, String>> {
@@ -873,7 +867,13 @@ fn handle_local_rkp_command(
     Some(result.map_err(|error| format!("{error:#}")))
 }
 
+#[cfg(not(feature = "local-rkp"))]
+fn handle_local_rkp_command(_args: impl Iterator<Item = String>) -> Option<Result<String, String>> {
+    None
+}
+
 fn main() {
+    #[cfg(feature = "soter")]
     if let Some(command) = std::env::args().nth(1).filter(|value| {
         value == "--webui-get-soter-local" || value == "--webui-set-soter-local-base64"
     }) {
@@ -933,6 +933,7 @@ fn main() {
         return;
     }
 
+    #[cfg(feature = "pif")]
     if let Some(result) = handle_webui_pif_command() {
         match result {
             Ok(output) => println!("{output}"),
@@ -977,9 +978,9 @@ fn main() {
         return;
     }
 
-    // A stale WebUI must not start the daemon after a helper command is removed.
-    if std::env::args().nth(1).is_some_and(|arg| arg.starts_with("--webui-")) {
-        eprintln!("unsupported WebUI command");
+    // A stale WebUI or worker launcher must not start the daemon after a helper is removed.
+    if std::env::args().nth(1).is_some_and(|arg| arg.starts_with("--")) {
+        eprintln!("unsupported helper command");
         std::process::exit(2);
     }
 
@@ -1111,8 +1112,13 @@ mod tests {
 
     #[test]
     fn maintenance_requires_exact_arguments_before_any_side_effect() {
+        assert!(handle_webui_maintenance_command(
+            ["--webui-clear-gms-cache", "extra"].into_iter().map(str::to_string)
+        )
+        .unwrap()
+        .is_err());
+        #[cfg(feature = "local-rkp")]
         for arguments in [
-            vec!["--webui-clear-gms-cache", "extra"],
             vec!["--webui-repair-rkp"],
             vec!["--webui-repair-rkp", "true"],
             vec!["--webui-repair-rkp", "--confirm-persistent-write", "extra"],
@@ -1124,6 +1130,7 @@ mod tests {
         assert!(handle_webui_maintenance_command(["unknown".to_string()].into_iter()).is_none());
     }
 
+    #[cfg(feature = "local-rkp")]
     #[test]
     fn local_rkp_requires_confirmation_and_exact_arguments() {
         for args in [

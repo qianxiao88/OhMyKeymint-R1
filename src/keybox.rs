@@ -1306,6 +1306,7 @@ pub fn install_keybox_xml(contents: &[u8]) -> Result<()> {
 
 /// Strict acceptance for a newly issued local RKP artifact. Ordinary Keybox import
 /// keeps its existing compatibility semantics; only the new issuer uses this gate.
+#[cfg(any(test, feature = "local-rkp"))]
 pub(crate) fn validate_issued_rkp_xml(contents: &[u8]) -> Result<()> {
     validate_issued_rkp_xml_with_roots(
         contents,
@@ -1313,6 +1314,7 @@ pub(crate) fn validate_issued_rkp_xml(contents: &[u8]) -> Result<()> {
     )
 }
 
+#[cfg(any(test, feature = "local-rkp"))]
 fn validate_issued_rkp_xml_with_roots(contents: &[u8], roots: &[&[u8]]) -> Result<()> {
     validate_keybox_xml(contents)
         .map_err(|_| anyhow!("issued RKP Keybox failed private-key/leaf validation"))?;

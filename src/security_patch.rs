@@ -363,8 +363,18 @@ fn load_snapshot(path: &Path) -> Result<Option<SecurityPatchDefaults>> {
 
     let contents = fs::read_to_string(path)
         .with_context(|| format!("failed to read security-patch defaults {}", path.display()))?;
-    let snapshot: SecurityPatchDefaults =
+    let mut table: toml::Table =
         toml::from_str(&contents).context("invalid security-patch defaults file")?;
+    if table.get("version").and_then(toml::Value::as_integer) == Some(2) {
+        // Read only the original pair from an existing extended snapshot. New
+        // snapshots retain the v1 schema; reading never rewrites saved state.
+        for field in ["ro.vendor.boot_security_patch", "boot_aliases", "synchronization_enabled"] {
+            table.remove(field);
+        }
+        table.insert("version".to_string(), toml::Value::Integer(i64::from(SNAPSHOT_VERSION)));
+    }
+    let snapshot: SecurityPatchDefaults =
+        toml::Value::Table(table).try_into().context("invalid security-patch defaults file")?;
     snapshot.validate()?;
     Ok(Some(snapshot))
 }
@@ -1029,6 +1039,85 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(*writes.borrow(), 0);
+    }
+
+    #[test]
+    fn startup_auto_does_not_read_or_write_dates_with_or_without_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("security_patch_defaults.toml");
+        for saved in [false, true] {
+            if saved {
+                persist_snapshot(
+                    &path,
+                    &SecurityPatchDefaults::new(
+                        "fingerprint",
+                        &properties(DEFAULT_SYSTEM, DEFAULT_VENDOR),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+            prepare_startup_with(
+                &ConfigFile::default(),
+                &path,
+                "fingerprint",
+                || panic!("auto startup must not read runtime dates"),
+                || panic!("auto startup must not refresh defaults"),
+                |_, _| panic!("auto startup must not write properties"),
+            )
+            .unwrap();
+            assert_eq!(path.exists(), saved);
+        }
+    }
+
+    #[test]
+    fn existing_extended_snapshot_restores_only_the_original_pair() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("security_patch_defaults.toml");
+        let contents = format!(
+            r#"version = 2
+build_fingerprint = "fingerprint"
+"ro.build.version.security_patch" = "{DEFAULT_SYSTEM}"
+"ro.vendor.build.security_patch" = "{DEFAULT_VENDOR}"
+"ro.vendor.boot_security_patch" = "2025-04-05"
+synchronization_enabled = false
+[boot_aliases]
+"ro.boot.security_patch" = "2025-03-05"
+"#
+        );
+        fs::write(&path, &contents).unwrap();
+        let snapshot = load_snapshot(&path).unwrap().unwrap();
+        assert_eq!(snapshot.version, SNAPSHOT_VERSION);
+        assert_eq!(snapshot.properties(), properties(DEFAULT_SYSTEM, DEFAULT_VENDOR));
+        assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+        let serialized = toml::to_string(&snapshot).unwrap();
+        let table: toml::Table = toml::from_str(&serialized).unwrap();
+        assert_eq!(table.len(), 4);
+        assert_eq!(table.get("version").and_then(toml::Value::as_integer), Some(1));
+
+        let current = RefCell::new(properties("2026-02-05", "2026-02-05"));
+        apply_webui_security_patch_with(
+            "auto",
+            PatchOperation {
+                config_file: &synchronized_config("2026-02-05"),
+                state_path: &path,
+                fingerprint: "fingerprint",
+            },
+            || Ok(current.borrow().clone()),
+            || panic!("saved original pair must be reused"),
+            |before, desired| {
+                assert_eq!(&*current.borrow(), before);
+                *current.borrow_mut() = desired.clone();
+                Ok(())
+            },
+            |value| {
+                assert_eq!(value, "auto");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(*current.borrow(), properties(DEFAULT_SYSTEM, DEFAULT_VENDOR));
+        assert!(!path.exists());
     }
 
     #[test]

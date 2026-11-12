@@ -18,22 +18,57 @@ test('build variants retain full by default and reject invalid variants', () => 
     assert.equal(state.variant, value || 'full')
     assert.equal(state.IS_LITE, value === 'lite')
     assert.equal(state.HAS_SOTER, !value || value === 'full')
-    assert.equal(state.R1_MODULE_NAME, 'OhMyKeymint-R1-1.3.8-301-full-dev')
+    assert.equal(state.R1_MODULE_NAME, 'OhMyKeymint-R1-1.3.8-302-full-dev')
     assert.equal(state.R1_AUTHOR, '\u6d45\u7b11\u5450')
   }
   assert.equal(variantHarness('full', 'custom').R1_MODULE_NAME, 'custom')
   assert.throws(() => variantHarness('invalid'), /Invalid VITE_R1_VARIANT/)
 })
 
-test('lite accepts only the six tool families; no-soter preserves other tools', () => {
+test('lite accepts only its five tool families; no-soter preserves other tools', () => {
   const lite = variantHarness('lite')
   for (const event of ['cloudUpdate', 'syncSecurityPatch', 'restoreSecurityPatch', 'clearGmsCache',
-    'openAppTargets', 'wallpaper', 'feedback']) assert.equal(lite.toolAvailable(event), true)
-  for (const event of ['installKeybox', 'spoofPif', 'repairRkp', 'issueRkp', 'openSoterLocal']) {
+    'openAppTargets', 'wallpaper']) assert.equal(lite.toolAvailable(event), true)
+  for (const event of ['installKeybox', 'spoofPif', 'repairRkp', 'issueRkp', 'openSoterLocal', 'feedback']) {
     assert.equal(lite.toolAvailable(event), false)
     assert.equal(variantHarness('full').toolAvailable(event), true)
     assert.equal(variantHarness('no-soter').toolAvailable(event), event !== 'openSoterLocal')
   }
+})
+
+test('lite tool rows exclude feedback and retain only requested actions', () => {
+  const tools = readFileSync(new URL('../src/vue/ToolsView.vue', import.meta.url), 'utf8')
+  const rows = tools.slice(tools.indexOf('const liteRows ='), tools.indexOf('const groups ='))
+  assert.doesNotMatch(rows, /feedbackRow|installKeybox|spoofPif|repairRkp|issueRkp|openSoterLocal/)
+  for (const action of ['cloudRow', "sheet: 'patch'", "event: 'clearGmsCache'", "event: 'openAppTargets'", 'wallpaperRow']) {
+    assert.ok(rows.includes(action), action)
+  }
+})
+
+test('build resolver excludes optional component sources before Vue compilation', () => {
+  const config = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8')
+  const code = stripTypeScriptTypes(config.slice(config.indexOf('export function variantComponents'), config.indexOf('export default defineConfig')).replace('export ', ''))
+  const create = vm.runInNewContext(`${code}\nvariantComponents`)
+  assert.equal(create('full'), undefined)
+  for (const variant of ['no-soter', 'lite']) {
+    const plugin = create(variant)
+    assert.equal(plugin.apply, 'build')
+    assert.equal(plugin.enforce, 'pre')
+    for (const component of ['SoterIdentityDialog.vue', 'PifFingerprintDialog.vue', 'SettingsView.vue']) {
+      const excluded = variant === 'lite' || component === 'SoterIdentityDialog.vue'
+      for (const path of [`./${component}`, `/repo/webui/src/vue/${component}`, `C:\\repo\\${component}?vue`]) {
+        const resolved = plugin.resolveId(path)
+        if (excluded) {
+          assert.ok(resolved.startsWith('\0r1-empty-component:'))
+          assert.ok(resolved.endsWith('.js'))
+          assert.equal(plugin.load(resolved), 'export default {}')
+        } else assert.equal(resolved, null)
+      }
+    }
+    assert.equal(plugin.resolveId('./HomeView.vue'), null)
+    assert.equal(plugin.load('/real/component.vue'), null)
+  }
+  assert.match(config, /plugins: \[variantComponents\(variant\), vue\(\)\]/)
 })
 
 const app = readFileSync(new URL('../src/vue/App.vue', import.meta.url), 'utf8')

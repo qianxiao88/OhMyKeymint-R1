@@ -24,9 +24,12 @@ const KEYBOX_PATH: &str = "/data/misc/keystore/omk/keybox.xml";
 const STATS_LIMIT: usize = 8 * 1024;
 const KEYBOX_LIMIT: usize = 64 * 1024;
 const CLOUD_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const CLOUD_RETRY_MIN: Duration = Duration::from_secs(15 * 60);
 const LOCAL_INTERVAL: Duration = Duration::from_secs(60);
 const STARTUP_GRACE: Duration = Duration::from_secs(120);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
+const HEALTH_RECHECK_DELAY: Duration = Duration::from_millis(300);
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 // Injection is a library/testing facility; the production CLI accepts no path overrides.
@@ -190,14 +193,31 @@ pub fn validate_diagnostics(bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn local_status(paths: &Paths) -> Result<()> {
+fn local_status_once(paths: &Paths) -> Result<()> {
     let bytes = command_output(
         &paths.keymint(),
-        &["--webui-get-diagnostics".into()],
-        COMMAND_TIMEOUT,
+        &["--webui-get-runtime-health".into()],
+        HEALTH_TIMEOUT,
         STATS_LIMIT,
     )?;
     validate_diagnostics(&bytes)
+}
+
+fn confirm_local_health(
+    mut probe: impl FnMut() -> Result<()>,
+    recheck: impl FnOnce(),
+) -> Result<()> {
+    if probe().is_ok() {
+        return Ok(());
+    }
+    recheck();
+    // A failed first sample must not become a permanent error after a normal
+    // keystore restart. A second failure remains authoritative, never cached OK.
+    probe()
+}
+
+fn local_status(paths: &Paths) -> Result<()> {
+    confirm_local_health(|| local_status_once(paths), || thread::sleep(HEALTH_RECHECK_DELAY))
 }
 
 pub fn validate_stats(bytes: &[u8]) -> Result<()> {
@@ -244,47 +264,185 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-fn get(url: &str) -> Result<ureq::http::Response<ureq::Body>> {
-    let response = agent()
-        .get(url)
-        .call()
-        .map_err(|_| "cloud HTTPS request failed (network, certificate, HTTP error or timeout)")?;
-    if response.status().as_u16() != 200 {
-        return Err("cloud returned unexpected HTTP status".into());
+fn get(
+    client: &ureq::Agent,
+    url: &str,
+    validators: &Validators,
+) -> Result<ureq::http::Response<ureq::Body>> {
+    let mut request = client.get(url);
+    if let Some(etag) = &validators.etag {
+        request = request.header("If-None-Match", etag);
     }
-    if response.headers().contains_key("content-encoding") {
-        return Err("encoded cloud responses are unsupported".into());
+    if let Some(modified) = &validators.last_modified {
+        request = request.header("If-Modified-Since", modified);
     }
-    Ok(response)
+    request.call().map_err(|_| {
+        "cloud HTTPS request failed (network, certificate, HTTP error or timeout)".into()
+    })
+}
+
+fn validate_response(
+    status: u16,
+    headers: &ureq::http::HeaderMap,
+    conditional: bool,
+) -> Result<()> {
+    match status {
+        200 => {
+            if headers.contains_key("content-encoding") {
+                return Err("encoded cloud responses are unsupported".into());
+            }
+            Ok(())
+        }
+        304 if conditional => Ok(()),
+        304 => Err("cloud returned 304 without a matching local cache".into()),
+        _ => Err("cloud returned unexpected HTTP status".into()),
+    }
 }
 
 fn cloud_stats() -> Result<()> {
-    let mut response = get(STATS_URL)?;
+    let mut response = get(&agent(), STATS_URL, &Validators::default())?;
+    validate_response(response.status().as_u16(), response.headers(), false)?;
     let bytes = read_limited(response.body_mut().as_reader(), STATS_LIMIT)?;
     validate_stats(&bytes)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+struct Validators {
+    etag: Option<String>,
+    last_modified: Option<String>,
+}
+
+impl Validators {
+    fn from_headers(headers: &ureq::http::HeaderMap) -> Self {
+        let field =
+            |name| headers.get(name).and_then(|value| value.to_str().ok()).map(str::to_string);
+        let mut validators = Self { etag: field("etag"), last_modified: field("last-modified") };
+        validators.sanitize();
+        validators
+    }
+
+    fn sanitize(&mut self) {
+        let valid = |value: &str| {
+            !value.is_empty()
+                && value.len() <= 512
+                && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+        };
+        self.etag = self.etag.take().filter(|value| {
+            let quoted = value.strip_prefix("W/").unwrap_or(value);
+            valid(value)
+                && quoted.len() >= 2
+                && quoted.starts_with('"')
+                && quoted.ends_with('"')
+                && quoted.as_bytes()[1..quoted.len() - 1]
+                    .iter()
+                    .all(|byte| *byte == 0x21 || (0x23..=0x7e).contains(byte))
+        });
+        self.last_modified = self.last_modified.take().filter(|value| valid(value));
+    }
+
+    fn present(&self) -> bool {
+        self.etag.is_some() || self.last_modified.is_some()
+    }
+
+    fn merge(&mut self, newer: Self) {
+        if newer.etag.is_some() {
+            self.etag = newer.etag;
+        }
+        if newer.last_modified.is_some() {
+            self.last_modified = newer.last_modified;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum KeyboxUpdate {
+    #[default]
+    Pending,
+    Updated,
+    Unchanged,
+    Failed,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CheckMode {
+    Manual,
+    Startup,
+    Scheduled,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 struct CloudObservation {
     checked_at: u64,
+    boot_id: Option<String>,
     connected: bool,
     reason: String,
+    next_check_at: u64,
+    failures: u32,
+    keybox: KeyboxUpdate,
+    keybox_reason: String,
+    keybox_checked_at: u64,
+    // Only successful installation/byte equality may advance this cache.
+    installed_sha256: Option<String>,
+    validators: Validators,
 }
 
 fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
+fn current_boot_id() -> Option<String> {
+    let contents = read_file(Path::new("/proc/sys/kernel/random/boot_id"), 64).ok()?;
+    let value = std::str::from_utf8(&contents).ok()?.trim();
+    (value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        }))
+    .then(|| value.to_ascii_lowercase())
+}
+
+fn retry_delay(failures: u32) -> Duration {
+    let multiplier = 1u64 << failures.saturating_sub(1).min(5);
+    Duration::from_secs((CLOUD_RETRY_MIN.as_secs() * multiplier).min(CLOUD_INTERVAL.as_secs()))
+}
+
 impl CloudObservation {
-    fn check() -> Self {
-        match cloud_stats() {
-            Ok(()) => Self { checked_at: now(), connected: true, reason: String::new() },
-            Err(reason) => Self { checked_at: now(), connected: false, reason },
-        }
+    fn fresh(&self) -> bool {
+        self.fresh_at(now(), current_boot_id().as_deref())
     }
 
-    fn fresh(&self) -> bool {
-        now().checked_sub(self.checked_at).is_some_and(|age| age < CLOUD_INTERVAL.as_secs())
+    fn fresh_at(&self, timestamp: u64, boot_id: Option<&str>) -> bool {
+        self.checked_at > 0
+            && self.boot_id.as_deref().zip(boot_id).is_some_and(|(saved, current)| saved == current)
+            && timestamp
+                .checked_sub(self.checked_at)
+                .is_some_and(|age| age <= CLOUD_INTERVAL.as_secs())
+    }
+
+    fn due(&self, timestamp: u64) -> bool {
+        self.checked_at == 0
+            || timestamp < self.checked_at
+            || timestamp >= self.next_check_at
+            || self.next_check_at.saturating_sub(timestamp) > CLOUD_INTERVAL.as_secs()
+    }
+
+    fn should_check(&self, mode: CheckMode, timestamp: u64) -> bool {
+        mode == CheckMode::Manual
+            || (mode == CheckMode::Startup && self.failures == 0)
+            || self.due(timestamp)
+    }
+
+    fn finish(&mut self, timestamp: u64, success: bool) {
+        self.checked_at = timestamp;
+        self.failures = if success { 0 } else { self.failures.saturating_add(1) };
+        let delay = if success { CLOUD_INTERVAL } else { retry_delay(self.failures) };
+        self.next_check_at = timestamp.saturating_add(delay.as_secs());
     }
 
     fn save(&self, paths: &Paths) -> Result<()> {
@@ -293,15 +451,16 @@ impl CloudObservation {
     }
 
     fn load(paths: &Paths) -> Self {
-        read_file(&paths.data.join("cloud.json"), STATS_LIMIT)
+        let mut observation = read_file(&paths.data.join("cloud.json"), STATS_LIMIT)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Self>(&bytes).ok())
-            .filter(Self::fresh)
-            .unwrap_or(Self {
-                checked_at: 0,
-                connected: false,
-                reason: "cloud stats awaiting verification".into(),
-            })
+            .unwrap_or_default();
+        observation.validators.sanitize();
+        if !observation.installed_sha256.as_deref().is_some_and(valid_sha256) {
+            observation.installed_sha256 = None;
+            observation.validators = Validators::default();
+        }
+        observation
     }
 }
 
@@ -310,27 +469,91 @@ pub struct Status {
     pub ok: bool,
     pub reason: String,
     pub cloud_connected: bool,
+    pub cloud_phase: String,
+    pub phase: String,
+    pub cloud_checked_at: u64,
+    pub cloud_reason: String,
+    pub keybox_update: String,
+    pub keybox_reason: String,
+    pub keybox_checked_at: u64,
+    pub next_cloud_check_at: u64,
 }
 
 fn status(local: Result<()>, cloud: &CloudObservation) -> Status {
-    let local_ok = local.is_ok();
-    let cloud_connected = cloud.connected && cloud.fresh();
-    let mut reason = match local {
-        Err(reason) => single_line(&reason),
-        Ok(()) if cloud_connected => String::new(),
-        Ok(()) if cloud.fresh() => single_line(&cloud.reason),
-        Ok(()) => "cloud stats awaiting verification".into(),
+    let ok = local.is_ok();
+    let reason = local.err().map(|reason| single_line(&reason)).unwrap_or_default();
+    let fresh = cloud.fresh();
+    let cloud_connected = cloud.connected && fresh;
+    let cloud_phase = if !fresh {
+        "pending"
+    } else if cloud.connected {
+        "connected"
+    } else {
+        "offline"
     };
-    let ok = local_ok && cloud_connected;
-    if !ok && reason.is_empty() {
-        reason =
-            if local_ok { "cloud stats unavailable" } else { "local diagnostics failed" }.into();
+    let phase = if !ok {
+        "failed"
+    } else if cloud_phase == "pending" {
+        "checking"
+    } else if cloud_connected {
+        "running"
+    } else {
+        "degraded"
+    };
+    let cloud_reason = if cloud_connected {
+        String::new()
+    } else if fresh && !cloud.reason.is_empty() {
+        single_line(&cloud.reason)
+    } else if cloud_phase == "offline" {
+        "cloud connection failed; retry scheduled".into()
+    } else {
+        "cloud check pending for this boot".into()
+    };
+    let keybox_update = match cloud.keybox {
+        KeyboxUpdate::Pending => "pending",
+        KeyboxUpdate::Updated => "updated",
+        KeyboxUpdate::Unchanged => "unchanged",
+        KeyboxUpdate::Failed => "failed",
     }
-    Status { ok, reason, cloud_connected }
+    .into();
+    Status {
+        ok,
+        reason: if !ok && reason.is_empty() { "local diagnostics failed".into() } else { reason },
+        cloud_connected,
+        cloud_phase: cloud_phase.into(),
+        phase: phase.into(),
+        cloud_checked_at: cloud.checked_at,
+        cloud_reason,
+        keybox_update,
+        keybox_reason: single_line(&cloud.keybox_reason),
+        keybox_checked_at: cloud.keybox_checked_at,
+        next_cloud_check_at: cloud.next_check_at,
+    }
 }
 
 fn startup_wait(local: &Result<()>, elapsed: Duration) -> bool {
     local.is_err() && elapsed < STARTUP_GRACE
+}
+
+#[derive(Default)]
+struct HealthStability {
+    ready_seen: bool,
+    failure_since: Option<Duration>,
+}
+
+impl HealthStability {
+    fn checking(&mut self, local: &Result<()>, elapsed: Duration) -> bool {
+        if local.is_ok() {
+            self.ready_seen = true;
+            self.failure_since = None;
+            return false;
+        }
+        let since = *self.failure_since.get_or_insert(elapsed);
+        if !self.ready_seen {
+            return startup_wait(local, elapsed);
+        }
+        elapsed.saturating_sub(since) < Duration::from_secs(30)
+    }
 }
 
 #[derive(Deserialize)]
@@ -362,15 +585,40 @@ pub enum DisplayState<'a> {
 }
 
 pub fn description(build: &BuildInfo, state: DisplayState<'_>) -> String {
+    let hash = &build.hash[build.hash.len() - 7..];
     match state {
-        DisplayState::Waiting(reason) => format!("OMK-R1 \u{542f}\u{52a8}/\u{68c0}\u{67e5}\u{4e2d}\u{3002}{}", single_line(reason)),
+        DisplayState::Waiting(reason) => format!(
+            "OMK-R1-\u{ff08}{}\u{ff09}-\u{ff08}{hash}\u{ff09}\u{542f}\u{52a8}/\u{68c0}\u{67e5}\u{4e2d}\u{3002}{}",
+            build.version,
+            single_line(reason)
+        ),
         DisplayState::Checked(status) if status.ok && status.cloud_connected => format!(
-            "\u{2705} OMK-R1-\u{ff08}{}\u{ff09}-\u{ff08}{}\u{ff09}\u{5df2}\u{6210}\u{529f}\u{8fd0}\u{884c}\u{3002}\u{5df2}\u{6210}\u{529f}\u{8fde}\u{63a5}\u{4e91}\u{7aef}\u{3002}\u{7b49}\u{7740}\u{88ab}\u{6211}\u{683c}\u{4f60}\u{673a}\u{673a}\u{5427}\u{1f604} \u{3010}\u{672c}\u{6a21}\u{5757}\u{7531}\u{3010}\u{6d45}\u{7b11}\u{5450}\u{3011}\u{4e8c}\u{6539}\u{81ea}\u{7528}\u{ff0c}\u{5c5e}\u{514d}\u{8d39}\u{6a21}\u{5757}\u{ff0c}\u{5012}\u{5356}\u{53ef}\u{803b}\u{3002}\u{3011}",
-            build.version, &build.hash[build.hash.len() - 7..]
+            "\u{2705} OMK-R1-\u{ff08}{}\u{ff09}-\u{ff08}{hash}\u{ff09}\u{5df2}\u{6210}\u{529f}\u{8fd0}\u{884c}\u{3002}\u{5df2}\u{6210}\u{529f}\u{8fde}\u{63a5}\u{4e91}\u{7aef}\u{3002}\u{7b49}\u{7740}\u{88ab}\u{6211}\u{683c}\u{4f60}\u{673a}\u{673a}\u{5427}\u{1f604} \u{3010}\u{672c}\u{6a21}\u{5757}\u{7531}\u{3010}\u{6d45}\u{7b11}\u{5450}\u{3011}\u{4e8c}\u{6539}\u{81ea}\u{7528}\u{ff0c}\u{5c5e}\u{514d}\u{8d39}\u{6a21}\u{5757}\u{ff0c}\u{5012}\u{5356}\u{53ef}\u{803b}\u{3002}\u{3011}",
+            build.version
         ),
-        DisplayState::Checked(status) => format!(
-            "\u{274c} OMK-R1 \u{8fd0}\u{884c}\u{5931}\u{8d25}\u{3002}\u{ff08}{}\u{ff09}\u{4f60}\u{5378}\u{8f7d}\u{5427}\u{3002}", single_line(&status.reason)
+        DisplayState::Checked(status) if status.ok && status.cloud_phase == "pending" => format!(
+            "OMK-R1-\u{ff08}{}\u{ff09}-\u{ff08}{hash}\u{ff09}\u{8fd0}\u{884c}\u{6b63}\u{5e38}\u{ff0c}\u{4e91}\u{7aef}\u{68c0}\u{67e5}\u{4e2d}\u{3002}{}",
+            build.version,
+            single_line(&status.cloud_reason)
         ),
+        DisplayState::Checked(status) => {
+            let mut reasons = Vec::new();
+            if !status.ok {
+                let reason = single_line(&status.reason);
+                reasons.push(if reason.is_empty() { "local diagnostics failed".into() } else { reason });
+            }
+            if !status.cloud_connected {
+                let reason = single_line(&status.cloud_reason);
+                reasons.push(format!(
+                    "\u{4e91}\u{7aef}\u{8fde}\u{63a5}\u{5931}\u{8d25}\u{ff1a}{}",
+                    if reason.is_empty() { "cloud check pending" } else { &reason }
+                ));
+            }
+            format!(
+                "\u{274c} OMK-R1 \u{8fd0}\u{884c}\u{5931}\u{8d25}\u{3002}\u{ff08}{}\u{ff09}\u{4f60}\u{5378}\u{8f7d}\u{5427}\u{3002}",
+                reasons.join("; ")
+            )
+        }
     }
 }
 
@@ -501,11 +749,15 @@ fn update_description(paths: &Paths, build: &BuildInfo, state: DisplayState<'_>)
     Ok(())
 }
 
+fn valid_sha256(expected: &str) -> bool {
+    expected.len() == 64 && expected.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 pub fn verify_keybox(bytes: &[u8], expected: &str) -> Result<()> {
     if bytes.is_empty() || bytes.len() > KEYBOX_LIMIT {
         return Err("keybox response empty or exceeds 65536 bytes".into());
     }
-    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !valid_sha256(expected) {
         return Err("missing or invalid X-Keybox-Sha256 header".into());
     }
     let actual = format!("{:x}", Sha256::digest(bytes));
@@ -515,66 +767,192 @@ pub fn verify_keybox(bytes: &[u8], expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn keybox_unchanged(path: &Path, staged: &[u8]) -> bool {
-    read_file(path, KEYBOX_LIMIT).is_ok_and(|local| local == staged)
+struct KeyboxResponse {
+    status: u16,
+    headers: ureq::http::HeaderMap,
+    bytes: Vec<u8>,
+}
+
+fn download_keybox(
+    client: &ureq::Agent,
+    url: &str,
+    validators: &Validators,
+) -> Result<KeyboxResponse> {
+    let mut response = get(client, url, validators)?;
+    let status = response.status().as_u16();
+    validate_response(status, response.headers(), validators.present())?;
+    let bytes = if status == 200 {
+        read_limited(response.body_mut().as_reader(), KEYBOX_LIMIT)?
+    } else {
+        Vec::new()
+    };
+    Ok(KeyboxResponse { status, headers: response.headers().clone(), bytes })
+}
+
+// Production keeps fixed HTTPS sources and native import; tests use only fixtures.
+trait UpdateBackend {
+    fn stats(&mut self) -> Result<()>;
+    fn download(&mut self, validators: &Validators) -> Result<KeyboxResponse>;
+    fn local_keybox(&self) -> Result<Vec<u8>>;
+    fn install(&mut self, bytes: &[u8]) -> Result<()>;
+}
+
+struct NativeBackend<'a>(&'a Paths);
+
+impl UpdateBackend for NativeBackend<'_> {
+    fn stats(&mut self) -> Result<()> {
+        cloud_stats()
+    }
+
+    fn download(&mut self, validators: &Validators) -> Result<KeyboxResponse> {
+        download_keybox(&agent(), KEYBOX_URL, validators)
+    }
+
+    fn local_keybox(&self) -> Result<Vec<u8>> {
+        read_file(Path::new(KEYBOX_PATH), KEYBOX_LIMIT)
+    }
+
+    fn install(&mut self, bytes: &[u8]) -> Result<()> {
+        let payload = STANDARD.encode(bytes);
+        let mut args = vec!["--webui-install-keybox".to_string()];
+        for chunk in payload.as_bytes().chunks(48 * 1024) {
+            args.push(std::str::from_utf8(chunk).map_err(|_| "cannot encode keybox")?.to_string());
+        }
+        let output = command_output(&self.0.keymint(), &args, COMMAND_TIMEOUT, 1024)?;
+        if output != b"ok\n" && output != b"ok" {
+            return Err(
+                "native keybox import returned unexpected acknowledgement; verify installed state"
+                    .into(),
+            );
+        }
+        // The native importer validates before atomic replacement. Its watcher reloads.
+        Ok(())
+    }
+}
+
+fn local_matches(backend: &impl UpdateBackend, digest: &str) -> bool {
+    backend.local_keybox().is_ok_and(|bytes| verify_keybox(&bytes, digest).is_ok())
+}
+
+fn update_keybox(
+    paths: &Paths,
+    cloud: &mut CloudObservation,
+    backend: &mut impl UpdateBackend,
+) -> Result<bool> {
+    // Never condition a request on a failed import or a changed/missing local file.
+    let validators = match cloud.installed_sha256.as_deref() {
+        Some(digest) if local_matches(backend, digest) => cloud.validators.clone(),
+        _ => Validators::default(),
+    };
+    let response = backend.download(&validators)?;
+    validate_response(response.status, &response.headers, validators.present())?;
+    let newer = Validators::from_headers(&response.headers);
+    if response.status == 304 {
+        let digest = cloud.installed_sha256.as_deref().ok_or("keybox cache is unavailable")?;
+        if !local_matches(backend, digest) {
+            return Err("local keybox changed during conditional download; retry required".into());
+        }
+        if let Some(header) = response.headers.get("X-Keybox-Sha256") {
+            let expected = header.to_str().map_err(|_| "invalid X-Keybox-Sha256 header")?;
+            if !valid_sha256(expected) || !expected.eq_ignore_ascii_case(digest) {
+                return Err("keybox SHA-256 mismatch on 304 response".into());
+            }
+        }
+        cloud.validators.merge(newer);
+        return Ok(true);
+    }
+    let expected = response
+        .headers
+        .get("X-Keybox-Sha256")
+        .and_then(|header| header.to_str().ok())
+        .ok_or("missing or invalid X-Keybox-Sha256 header")?;
+    verify_keybox(&response.bytes, expected)?;
+    let unchanged = backend.local_keybox().is_ok_and(|local| local == response.bytes);
+    if !unchanged {
+        let mut temp = TempFile::create(&paths.data, "keybox")?;
+        temp.file.write_all(&response.bytes).map_err(|_| "cannot stage cloud keybox")?;
+        temp.file.sync_all().map_err(|_| "cannot sync staged keybox")?;
+        let staged = read_file(&temp.path, KEYBOX_LIMIT)?;
+        verify_keybox(&staged, expected)?;
+        backend.install(&staged)?;
+        // A missing/changed file after acknowledgement must not advance the cache.
+        if !local_matches(backend, expected) {
+            return Err(
+                "native keybox import did not confirm installed bytes; retry required".into()
+            );
+        }
+    }
+    cloud.installed_sha256 = Some(expected.to_ascii_lowercase());
+    cloud.validators = newer;
+    Ok(unchanged)
+}
+
+// One update lock covers network, native import, retry schedule and atomic state.
+// None means another updater won the lock or the persisted schedule is not due.
+fn cloud_check(
+    paths: &Paths,
+    mode: CheckMode,
+    backend: &mut impl UpdateBackend,
+) -> Result<Option<bool>> {
+    let _lock = match Lock::acquire(&paths.data.join("update.lock"), Duration::ZERO) {
+        Ok(lock) => lock,
+        Err(reason) if mode != CheckMode::Manual && reason == "another R1 operation is running" => {
+            return Ok(None);
+        }
+        Err(reason) => return Err(reason),
+    };
+    let mut cloud = CloudObservation::load(paths);
+    if !cloud.should_check(mode, now()) {
+        return Ok(None);
+    }
+    let stats = backend.stats();
+    let outcome = update_keybox(paths, &mut cloud, backend);
+    let timestamp = now();
+    // Either endpoint can prove a verified connection. A stats-schema outage
+    // must not erase a successful, validated keybox response (or vice versa).
+    cloud.connected = stats.is_ok() || outcome.is_ok();
+    cloud.reason = if cloud.connected {
+        String::new()
+    } else {
+        format!(
+            "stats: {}; keybox: {}",
+            stats.as_ref().err().map(String::as_str).unwrap_or("not checked"),
+            outcome.as_ref().err().map(String::as_str).unwrap_or("not checked")
+        )
+    };
+    cloud.boot_id = current_boot_id();
+    cloud.keybox = match &outcome {
+        Ok(true) => KeyboxUpdate::Unchanged,
+        Ok(false) => KeyboxUpdate::Updated,
+        Err(_) => KeyboxUpdate::Failed,
+    };
+    cloud.keybox_reason = outcome.as_ref().err().cloned().unwrap_or_default();
+    if outcome.is_ok() {
+        cloud.keybox_checked_at = timestamp;
+    }
+    cloud.finish(timestamp, cloud.connected && outcome.is_ok());
+    // A state write failure returns an error, never a successful update receipt.
+    cloud.save(paths)?;
+    outcome.map(Some)
+}
+
+fn refresh_description(paths: &Paths, build: &BuildInfo) -> Result<()> {
+    let checked = status(local_status(paths), &CloudObservation::load(paths));
+    update_description(paths, build, DisplayState::Checked(&checked))
 }
 
 fn cloud_update(paths: &Paths, build: &BuildInfo) -> Result<bool> {
-    let _lock = Lock::acquire(&paths.data.join("update.lock"), Duration::ZERO)?;
-    update_description(
-        paths,
-        build,
-        DisplayState::Waiting("downloading and validating cloud keybox"),
-    )?;
-    let mut response = get(KEYBOX_URL)?;
-    let expected = response
-        .headers()
-        .get("X-Keybox-Sha256")
-        .and_then(|v| v.to_str().ok())
-        .ok_or("missing or invalid X-Keybox-Sha256 header")?
-        .to_string();
-    let mut temp = TempFile::create(&paths.data, "keybox")?;
-    let count = std::io::copy(
-        &mut response.body_mut().as_reader().take(KEYBOX_LIMIT as u64 + 1),
-        &mut temp.file,
-    )
-    .map_err(|_| "cannot download keybox to private staging file (I/O or timeout)")?;
-    if count > KEYBOX_LIMIT as u64 {
-        return Err("keybox response exceeds 65536 bytes".into());
+    let outcome = cloud_check(paths, CheckMode::Manual, &mut NativeBackend(paths));
+    if let Err(reason) = refresh_description(paths, build) {
+        eprintln!("r1-helper: status refresh failed: {reason}");
     }
-    temp.file.sync_all().map_err(|_| "cannot sync staged keybox")?;
-    let staged = read_file(&temp.path, KEYBOX_LIMIT)?;
-    verify_keybox(&staged, &expected)?;
-    let unchanged = keybox_unchanged(Path::new(KEYBOX_PATH), &staged);
-    let payload = STANDARD.encode(&staged);
-    let mut args = vec!["--webui-install-keybox".to_string()];
-    for chunk in payload.as_bytes().chunks(48 * 1024) {
-        args.push(std::str::from_utf8(chunk).map_err(|_| "cannot encode keybox")?.to_string());
-    }
-    let output = command_output(&paths.keymint(), &args, COMMAND_TIMEOUT, 1024)?;
-    if output != b"ok\n" && output != b"ok" {
-        return Err(
-            "native keybox import returned unexpected acknowledgement; verify installed state"
-                .into(),
-        );
-    }
-    drop(temp);
-    // Native install validates before replacement; its existing watcher performs reload.
-    // Import success stays authoritative even if subsequent status refresh fails.
-    let cloud = CloudObservation::check();
-    if let Err(reason) = cloud.save(paths) {
-        eprintln!("r1-helper: {reason}");
-    }
-    let checked = status(local_status(paths), &cloud);
-    if let Err(reason) = update_description(paths, build, DisplayState::Checked(&checked)) {
-        eprintln!("r1-helper: keybox imported; status refresh failed: {reason}");
-    }
-    Ok(unchanged)
+    outcome?.ok_or_else(|| "cloud update is already running".into())
 }
 
 fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
     let _monitor = Lock::acquire(&paths.data.join("monitor.lock"), Duration::ZERO)?;
     update_description(paths, build, DisplayState::Waiting("waiting for Android boot completion"))?;
+    let boot_started = Instant::now();
     loop {
         let boot = command_output(
             Path::new("/system/bin/getprop"),
@@ -586,34 +964,59 @@ fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
             Ok(bytes) if bytes == b"1\n" || bytes == b"1" => break,
             Ok(_) => thread::sleep(Duration::from_secs(5)),
             Err(reason) => {
-                let checked = Status { ok: false, reason: reason.clone(), cloud_connected: false };
-                update_description(paths, build, DisplayState::Checked(&checked))?;
-                return Err(reason);
+                if boot_started.elapsed() < STARTUP_GRACE {
+                    update_description(paths, build, DisplayState::Waiting(&reason))?;
+                } else {
+                    let checked = status(Err(reason), &CloudObservation::load(paths));
+                    update_description(paths, build, DisplayState::Checked(&checked))?;
+                }
+                thread::sleep(Duration::from_secs(5));
             }
         }
     }
     let boot_ready = Instant::now();
+    let mut stability = HealthStability::default();
     let mut next_cloud = Instant::now();
+    let mut mode = CheckMode::Startup;
     loop {
         let cycle = Instant::now();
-        let local = local_status(paths);
-        if cycle >= next_cloud {
-            let cloud = CloudObservation::check();
-            cloud.save(paths)?;
-            next_cloud =
-                Instant::now() + if cloud.connected { CLOUD_INTERVAL } else { LOCAL_INTERVAL };
+        let mut local = local_status(paths);
+        if local.is_ok() && cycle >= next_cloud {
+            let checked = cloud_check(paths, mode, &mut NativeBackend(paths));
+            if !matches!(checked, Ok(None)) {
+                mode = CheckMode::Scheduled;
+            }
+            if let Err(reason) = &checked {
+                eprintln!("r1-helper: cloud update deferred: {}", single_line(reason));
+            }
+            let cloud = CloudObservation::load(paths);
+            let delay = if checked.is_err() && cloud.due(now()) {
+                // Also back off if the retry schedule could not be persisted.
+                CLOUD_RETRY_MIN
+            } else if cloud.due(now()) {
+                // A concurrent manual update holds the lock; no network ran here.
+                LOCAL_INTERVAL
+            } else {
+                Duration::from_secs(cloud.next_check_at.saturating_sub(now()))
+            };
+            next_cloud = Instant::now() + delay;
+            local = local_status(paths);
         }
-        if startup_wait(&local, boot_ready.elapsed()) {
+        let health_checking = stability.checking(&local, boot_ready.elapsed());
+        if health_checking {
             update_description(
                 paths,
                 build,
-                DisplayState::Waiting("waiting for keymint/keystore2/injector"),
+                DisplayState::Waiting(
+                    local.as_ref().err().map(String::as_str).unwrap_or("checking runtime health"),
+                ),
             )?;
         } else {
             let checked = status(local, &CloudObservation::load(paths));
             update_description(paths, build, DisplayState::Checked(&checked))?;
         }
-        thread::sleep(LOCAL_INTERVAL.saturating_sub(cycle.elapsed()));
+        let interval = if health_checking { Duration::from_secs(5) } else { LOCAL_INTERVAL };
+        thread::sleep(interval.saturating_sub(cycle.elapsed()));
     }
 }
 
@@ -632,19 +1035,7 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     let build = BuildInfo::parse(&read_file(&paths.module.join("r1-build.json"), STATS_LIMIT)?)?;
     match command.as_str() {
         "cloud-update" => {
-            let unchanged = match cloud_update(&paths, &build) {
-                Ok(unchanged) => unchanged,
-                Err(reason) => {
-                    let checked =
-                        Status { ok: false, reason: single_line(&reason), cloud_connected: false };
-                    if let Err(error) =
-                        update_description(&paths, &build, DisplayState::Checked(&checked))
-                    {
-                        eprintln!("r1-helper: status refresh failed: {error}");
-                    }
-                    return Err(reason);
-                }
-            };
+            let unchanged = cloud_update(&paths, &build)?;
             println!("{{\"ok\":true,\"unchanged\":{unchanged}}}");
             Ok(())
         }
