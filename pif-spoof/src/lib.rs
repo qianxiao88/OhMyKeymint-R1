@@ -91,12 +91,15 @@ enum PifTarget {
 }
 
 impl PifTarget {
-    fn spoof_build(self, _profile: &PifProfile) -> bool {
-        self == Self::PlayStore
+    fn spoof_build(self, profile: &PifProfile) -> bool {
+        match self {
+            Self::Gms => profile.spoof_build,
+            Self::PlayStore => profile.spoof_vending_build,
+        }
     }
 
-    fn spoof_props(self, _profile: &PifProfile) -> bool {
-        false
+    fn spoof_props(self, profile: &PifProfile) -> bool {
+        self == Self::Gms && profile.spoof_props
     }
 
     fn build_fields(
@@ -1516,8 +1519,12 @@ fn load_profile_for_companion() -> Result<Vec<u8>, String> {
     }
     let contents =
         fs::read(PROFILE_PATH).map_err(|error| format!("failed to read profile: {error}"))?;
-    let profile = PifProfile::from_canonical_json(&contents)?;
-    Ok(profile.to_canonical_json()?.into_bytes())
+    let profile = PifProfile::from_json(&contents)?;
+    let canonical = profile.to_canonical_json()?.into_bytes();
+    if contents != canonical {
+        return Err("profile file is not canonical JSON".to_string());
+    }
+    Ok(canonical)
 }
 
 fn apply_build_fields(
@@ -1743,7 +1750,7 @@ mod tests {
     }
 
     #[test]
-    fn store_build_scope_ignores_legacy_flags_and_covers_the_complete_profile() {
+    fn store_build_scope_is_independent_and_covers_the_complete_profile() {
         for build in [false, true] {
             for props in [false, true] {
                 for vending in [false, true] {
@@ -1753,12 +1760,12 @@ mod tests {
                     profile.spoof_props = props;
                     profile.spoof_vending_build = vending;
                     profile.validate().unwrap();
-                    assert!(!PifTarget::Gms.spoof_build(&profile));
-                    assert!(!PifTarget::Gms.spoof_props(&profile));
-                    assert!(PifTarget::PlayStore.spoof_build(&profile));
+                    assert_eq!(PifTarget::Gms.spoof_build(&profile), build);
+                    assert_eq!(PifTarget::Gms.spoof_props(&profile), props);
+                    assert_eq!(PifTarget::PlayStore.spoof_build(&profile), vending);
                     assert!(!PifTarget::PlayStore.spoof_props(&profile));
                     let fields: Vec<_> = PifTarget::PlayStore.build_fields(&profile).collect();
-                    {
+                    if vending {
                         let expected = profile.build_fields();
                         assert_eq!(fields.len(), expected.len());
                         assert_eq!(
@@ -1790,8 +1797,13 @@ mod tests {
                             *name,
                             "SDK_INT" | "DEVICE_INITIAL_SDK_INT"
                         )));
+                    } else {
+                        assert!(fields.is_empty());
                     }
-                    assert_eq!(PifTarget::Gms.build_fields(&profile).count(), 0);
+                    assert_eq!(
+                        PifTarget::Gms.build_fields(&profile).count(),
+                        if build { 12 } else { 0 }
+                    );
                 }
             }
         }

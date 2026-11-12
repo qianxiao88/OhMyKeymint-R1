@@ -10,6 +10,7 @@ const NEXT_FIXTURE: &[u8] = b"fixture-keybox-v2";
 
 struct MockBackend {
     local: Option<Vec<u8>>,
+    bundled: Option<Vec<u8>>,
     responses: VecDeque<Result<KeyboxResponse>>,
     requests: Vec<Validators>,
     stats_calls: usize,
@@ -24,6 +25,7 @@ impl MockBackend {
     fn new(local: Option<&[u8]>, responses: Vec<Result<KeyboxResponse>>) -> Self {
         Self {
             local: local.map(<[u8]>::to_vec),
+            bundled: None,
             responses: responses.into(),
             requests: Vec::new(),
             stats_calls: 0,
@@ -33,6 +35,11 @@ impl MockBackend {
             install_writes: true,
             mutate_on_download: None,
         }
+    }
+
+    fn with_bundled(mut self, bundled: &[u8]) -> Self {
+        self.bundled = Some(bundled.to_vec());
+        self
     }
 }
 
@@ -56,6 +63,10 @@ impl UpdateBackend for MockBackend {
 
     fn local_keybox(&self) -> Result<Vec<u8>> {
         self.local.clone().ok_or_else(|| "mock local keybox missing".into())
+    }
+
+    fn bundled_keybox(&self) -> Result<Vec<u8>> {
+        self.bundled.clone().ok_or_else(|| "mock bundled keybox missing".into())
     }
 
     fn install(&mut self, bytes: &[u8]) -> Result<()> {
@@ -449,4 +460,62 @@ fn atomic_state_error_is_not_reported_as_success() {
     assert_eq!(backend.installs, 1);
     assert!(paths.data.join("cloud.json").is_dir());
     assert_eq!(CloudObservation::load(&paths).keybox, KeyboxUpdate::Pending);
+}
+
+#[test]
+fn automatic_updates_preserve_a_custom_self_signed_keybox() {
+    for mode in [CheckMode::Startup, CheckMode::Scheduled] {
+        let root = TestRoot::new();
+        let paths = root.paths();
+        let mut backend =
+            MockBackend::new(Some(NEXT_FIXTURE), vec![Ok(response(200, FIXTURE))])
+                .with_bundled(FIXTURE);
+        assert_eq!(cloud_check(&paths, mode, &mut backend).unwrap(), Some(true));
+        assert_eq!(backend.requests.len(), 0);
+        assert_eq!(backend.installs, 0);
+        assert_eq!(backend.local.as_deref(), Some(NEXT_FIXTURE));
+        let cloud = CloudObservation::load(&paths);
+        assert_eq!(cloud.keybox, KeyboxUpdate::Skipped);
+        assert!(cloud.keybox_reason.contains("custom keybox"));
+        assert!(cloud.connected);
+    }
+}
+
+#[test]
+fn automatic_updates_still_replace_the_bundled_seed_and_cloud_managed_keybox() {
+    for (local, update) in [(FIXTURE, NEXT_FIXTURE), (NEXT_FIXTURE, FIXTURE)] {
+        let root = TestRoot::new();
+        let paths = root.paths();
+        if local != FIXTURE {
+            cache(&paths, local);
+        }
+        let mut backend = MockBackend::new(Some(local), vec![Ok(response(200, update))])
+            .with_bundled(FIXTURE);
+        assert_eq!(cloud_check(&paths, CheckMode::Scheduled, &mut backend).unwrap(), Some(false));
+        assert_eq!(backend.installs, 1);
+        assert_eq!(backend.local.as_deref(), Some(update));
+        assert_eq!(CloudObservation::load(&paths).keybox, KeyboxUpdate::Updated);
+    }
+}
+
+#[test]
+fn manual_cloud_update_still_replaces_a_custom_keybox_on_request() {
+    let root = TestRoot::new();
+    let paths = root.paths();
+    let mut backend = MockBackend::new(Some(NEXT_FIXTURE), vec![Ok(response(200, FIXTURE))])
+        .with_bundled(FIXTURE);
+    assert_eq!(cloud_check(&paths, CheckMode::Manual, &mut backend).unwrap(), Some(false));
+    assert_eq!(backend.installs, 1);
+    assert_eq!(backend.local.as_deref(), Some(FIXTURE));
+    assert_eq!(CloudObservation::load(&paths).keybox, KeyboxUpdate::Updated);
+}
+
+#[test]
+fn missing_bundled_reference_does_not_prove_custom_and_keeps_updating() {
+    let root = TestRoot::new();
+    let paths = root.paths();
+    let mut backend = MockBackend::new(Some(NEXT_FIXTURE), vec![Ok(response(200, FIXTURE))]);
+    assert_eq!(cloud_check(&paths, CheckMode::Scheduled, &mut backend).unwrap(), Some(false));
+    assert_eq!(backend.installs, 1);
+    assert_eq!(CloudObservation::load(&paths).keybox, KeyboxUpdate::Updated);
 }

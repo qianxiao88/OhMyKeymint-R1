@@ -362,6 +362,7 @@ enum KeyboxUpdate {
     Pending,
     Updated,
     Unchanged,
+    Skipped,
     Failed,
 }
 
@@ -513,6 +514,7 @@ fn status(local: Result<()>, cloud: &CloudObservation) -> Status {
         KeyboxUpdate::Pending => "pending",
         KeyboxUpdate::Updated => "updated",
         KeyboxUpdate::Unchanged => "unchanged",
+        KeyboxUpdate::Skipped => "skipped",
         KeyboxUpdate::Failed => "failed",
     }
     .into();
@@ -795,6 +797,12 @@ trait UpdateBackend {
     fn download(&mut self, validators: &Validators) -> Result<KeyboxResponse>;
     fn local_keybox(&self) -> Result<Vec<u8>>;
     fn install(&mut self, bytes: &[u8]) -> Result<()>;
+    // Bytes of the keybox shipped with the module. Used only to tell a
+    // user-replaced keybox apart from the bundled seed. Tests that do not
+    // care about that distinction keep the default (unprovable).
+    fn bundled_keybox(&self) -> Result<Vec<u8>> {
+        Err("bundled keybox is unavailable".into())
+    }
 }
 
 struct NativeBackend<'a>(&'a Paths);
@@ -810,6 +818,10 @@ impl UpdateBackend for NativeBackend<'_> {
 
     fn local_keybox(&self) -> Result<Vec<u8>> {
         read_file(Path::new(KEYBOX_PATH), KEYBOX_LIMIT)
+    }
+
+    fn bundled_keybox(&self) -> Result<Vec<u8>> {
+        read_file(&self.0.module.join("keybox.xml"), KEYBOX_LIMIT)
     }
 
     fn install(&mut self, bytes: &[u8]) -> Result<()> {
@@ -832,6 +844,27 @@ impl UpdateBackend for NativeBackend<'_> {
 
 fn local_matches(backend: &impl UpdateBackend, digest: &str) -> bool {
     backend.local_keybox().is_ok_and(|bytes| verify_keybox(&bytes, digest).is_ok())
+}
+
+// A user-supplied keybox (self-signed or manually replaced) is byte-distinct
+// from both the bundled seed and the last cloud-installed bytes. Auto-update
+// must leave it untouched. Bundled-seed and cloud-managed installs still update.
+fn preserves_custom_keybox(cloud: &CloudObservation, backend: &impl UpdateBackend) -> bool {
+    let Ok(local) = backend.local_keybox() else { return false };
+    if local.is_empty() || local.len() > KEYBOX_LIMIT {
+        return false;
+    }
+    let local_digest = format!("{:x}", Sha256::digest(&local));
+    if cloud.installed_sha256.as_deref().is_some_and(|digest| {
+        digest.eq_ignore_ascii_case(&local_digest)
+    }) {
+        return false;
+    }
+    match backend.bundled_keybox() {
+        Ok(bundled) => local != bundled,
+        // Without the bundled reference we cannot prove the file is custom.
+        Err(_) => false,
+    }
 }
 
 fn update_keybox(
@@ -906,7 +939,12 @@ fn cloud_check(
         return Ok(None);
     }
     let stats = backend.stats();
-    let outcome = update_keybox(paths, &mut cloud, backend);
+    // Automatic checks never replace a user-supplied keybox. The explicit
+    // manual action still imports the cloud keybox on request.
+    let skip_custom =
+        mode != CheckMode::Manual && preserves_custom_keybox(&cloud, backend);
+    let outcome =
+        if skip_custom { Ok(true) } else { update_keybox(paths, &mut cloud, backend) };
     let timestamp = now();
     // Either endpoint can prove a verified connection. A stats-schema outage
     // must not erase a successful, validated keybox response (or vice versa).
@@ -921,12 +959,20 @@ fn cloud_check(
         )
     };
     cloud.boot_id = current_boot_id();
-    cloud.keybox = match &outcome {
-        Ok(true) => KeyboxUpdate::Unchanged,
-        Ok(false) => KeyboxUpdate::Updated,
-        Err(_) => KeyboxUpdate::Failed,
+    cloud.keybox = if skip_custom {
+        KeyboxUpdate::Skipped
+    } else {
+        match &outcome {
+            Ok(true) => KeyboxUpdate::Unchanged,
+            Ok(false) => KeyboxUpdate::Updated,
+            Err(_) => KeyboxUpdate::Failed,
+        }
     };
-    cloud.keybox_reason = outcome.as_ref().err().cloned().unwrap_or_default();
+    cloud.keybox_reason = if skip_custom {
+        "custom keybox preserved; cloud auto-update skipped".into()
+    } else {
+        outcome.as_ref().err().cloned().unwrap_or_default()
+    };
     if outcome.is_ok() {
         cloud.keybox_checked_at = timestamp;
     }

@@ -820,12 +820,13 @@ export class Cli {
 
   async applyPifFingerprint(
     product: string,
-    spoofBuild = false,
-    spoofProps = false,
-    spoofVendingBuild = true,
+    spoofBuild = true,
+    spoofProps = true,
+    spoofVendingBuild = false,
   ): Promise<EnabledPifFingerprintState> {
     if (!isPifProduct(product)) throw new Error('Invalid PIF product')
-    if (spoofBuild !== false || spoofProps !== false || spoofVendingBuild !== true) {
+    if (typeof spoofBuild !== 'boolean' || typeof spoofProps !== 'boolean'
+        || typeof spoofVendingBuild !== 'boolean') {
       throw new Error('Invalid PIF spoofing options')
     }
     const { keymint } = await this.#getHelperPaths()

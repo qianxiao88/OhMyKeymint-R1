@@ -700,13 +700,12 @@ fn handle_webui_pif_command() -> Option<Result<String, String>> {
             };
             let options: Vec<String> = args.collect();
             let (spoof_build, spoof_props, spoof_vending_build) = match options.as_slice() {
-                [] => (false, false, true),
-                // Accept old UI flag shapes without restoring their GMS scope.
+                [] => (true, true, false),
                 [build, props] if matches!(build.as_str(), "0" | "1")
-                    && matches!(props.as_str(), "0" | "1") => (false, false, true),
+                    && matches!(props.as_str(), "0" | "1") => (build == "1", props == "1", false),
                 [build, props, vending] if matches!(build.as_str(), "0" | "1")
                     && matches!(props.as_str(), "0" | "1")
-                    && matches!(vending.as_str(), "0" | "1") => (false, false, true),
+                    && matches!(vending.as_str(), "0" | "1") => (build == "1", props == "1", vending == "1"),
                 _ => return Some(Err(
                     "--webui-apply-pif-fingerprint accepts a product, optional spoofBuild spoofProps flags, and an optional spoofVendingBuild flag (0 or 1)".to_string(),
                 )),

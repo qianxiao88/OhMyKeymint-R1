@@ -17,9 +17,9 @@ const profile = (overrides = {}) => ({
   fingerprint: 'google/bluejay_beta/bluejay:16/EXAMPLE/1:user/release-keys',
   security_patch: '2026-10-05',
   device_initial_sdk_int: 32,
-  spoof_build: false,
-  spoof_props: false,
-  spoof_vending_build: true,
+  spoof_build: true,
+  spoof_props: true,
+  spoof_vending_build: false,
   ...overrides,
 })
 
@@ -34,7 +34,14 @@ function dialogHarness({ state = profile(), preview = false, applyResult } = {})
     listPifDevices: async () => { reads.push('catalog'); return [{ model: 'Pixel 6a', product: 'bluejay_beta' }] },
     applyPifFingerprint: async (...args) => {
       calls.push(args)
-      return applyResult ? applyResult(...args) : profile({ product: args[0] })
+      return applyResult
+        ? applyResult(...args)
+        : profile({
+            product: args[0],
+            spoof_build: args[1],
+            spoof_props: args[2],
+            spoof_vending_build: args[3],
+          })
     },
     disablePifFingerprint: async () => { calls.push(['disable']); return { enabled: false } },
   }
@@ -43,6 +50,7 @@ function dialogHarness({ state = profile(), preview = false, applyResult } = {})
     loadState, loadCatalog, retryState, retryCatalog, apply, requestClose,
     currentState, desiredEnabled, selectedProduct, stateStatus, catalogStatus,
     stateError, catalogError, canApply, busy, devices, previewDevices,
+    spoofBuild, spoofProps, spoofVendingBuild,
   })`, {
     defineProps: () => props,
     defineEmits: () => (...args) => events.push(args),
@@ -61,13 +69,17 @@ function dialogHarness({ state = profile(), preview = false, applyResult } = {})
     for (const [sources, callback] of watchers) {
       await callback(sources.map(source => typeof source === 'function' ? source() : source.value), [], () => {})
     }
-    // Drain the async loadCatalog started by the component's actual watcher.
     await new Promise(resolve => setImmediate(resolve))
   }
   return { ...dialog, calls, events, errors, reads, updateCatalog }
 }
 
-function cliHarness(result = profile()) {
+function cliHarness(result = args => profile({
+  product: args[1],
+  spoof_build: args[2] === '1',
+  spoof_props: args[3] === '1',
+  spoof_vending_build: args[4] === '1',
+})) {
   const calls = [], execCalls = []
   const securityPatch = withoutImports(readFileSync(new URL('../src/security_patch.ts', import.meta.url), 'utf8'))
   const code = stripTypeScriptTypes(`${securityPatch.replaceAll('export ', '')}\n${withoutImports(cliSource).replaceAll('export ', '')}\nnew Cli()`)
@@ -83,7 +95,7 @@ function cliHarness(result = profile()) {
       process.stdout = new EventEmitter()
       process.stderr = new EventEmitter()
       queueMicrotask(() => {
-        process.stdout.emit('data', JSON.stringify(result))
+        process.stdout.emit('data', JSON.stringify(typeof result === 'function' ? result(Array.from(args)) : result))
         process.emit('exit', 0)
       })
       return process
@@ -92,18 +104,20 @@ function cliHarness(result = profile()) {
   return { cli, calls, execCalls }
 }
 
-test('PIF exposes only its master switch and keeps the device, state and action controls', () => {
+test('PIF exposes the master switch plus three independent spoof switches', () => {
   assert.equal((template.match(/role="switch"/g) ?? []).length, 1)
-  assert.equal((template.match(/<MiuixSwitch\b/g) ?? []).length, 1)
-  assert.doesNotMatch(component, /MiuixSwitchPreference|spoofBuild|spoofProps|spoofVendingBuild/)
-  assert.doesNotMatch(template, /pif_zygisk|Zygisk|pif_copg|COPG|pif_spoof_|pif-profile-sources/)
+  assert.equal((template.match(/<MiuixSwitchPreference\b/g) ?? []).length, 3)
+  for (const control of ['spoofBuild', 'spoofProps', 'spoofVendingBuild', 'pif_spoof_build',
+    'pif_spoof_props', 'pif_spoof_vending']) {
+    assert.ok(component.includes(control), control)
+  }
   const master = template.slice(template.indexOf('<MiuixBasicComponent'), template.indexOf('</MiuixBasicComponent>'))
-  assert.doesNotMatch(master, /:summary=/)
   for (const control of ['current-config', 'device-list', '@click="retryCatalog"', '@click="retryState"',
     '@click="requestClose"', '@click="apply"', 'stateError', 'catalogError']) assert.ok(template.includes(control), control)
+  assert.ok(master.includes('pif_enable_spoofing'))
 })
 
-test('stored legacy profiles never restore spoofing controls or alter the Store-only apply flags', async () => {
+test('stored profiles restore the three switches and apply the selected flags', async () => {
   for (const flags of [
     { spoof_build: true, spoof_props: true, spoof_vending_build: false },
     { spoof_build: true, spoof_props: false, spoof_vending_build: false },
@@ -114,12 +128,17 @@ test('stored legacy profiles never restore spoofing controls or alter the Store-
     await dialog.loadCatalog(0)
     assert.equal(dialog.desiredEnabled.value, true)
     assert.equal(dialog.selectedProduct.value, 'bluejay_beta')
+    assert.equal(dialog.spoofBuild.value, flags.spoof_build)
+    assert.equal(dialog.spoofProps.value, flags.spoof_props)
+    assert.equal(dialog.spoofVendingBuild.value, flags.spoof_vending_build)
     assert.equal(dialog.canApply.value, true)
     await dialog.apply()
-    assert.deepEqual(dialog.calls, [['bluejay_beta', false, false, true]])
-    assert.equal(dialog.currentState.value.spoof_build, false)
-    assert.equal(dialog.currentState.value.spoof_props, false)
-    assert.equal(dialog.currentState.value.spoof_vending_build, true)
+    assert.deepEqual(dialog.calls, [[
+      'bluejay_beta', flags.spoof_build, flags.spoof_props, flags.spoof_vending_build,
+    ]])
+    assert.equal(dialog.currentState.value.spoof_build, flags.spoof_build)
+    assert.equal(dialog.currentState.value.spoof_props, flags.spoof_props)
+    assert.equal(dialog.currentState.value.spoof_vending_build, flags.spoof_vending_build)
     assert.ok(dialog.events.some(event => event[0] === 'changed'))
     assert.ok(dialog.events.some(event => event[0] === 'update:modelValue' && event[1] === false))
   }
@@ -169,10 +188,13 @@ test('development preview restores multiple Pixel examples and changes no device
   assert.deepEqual(Array.from(dialog.previewDevices, item => item.model), ['Pixel 6a', 'Pixel 9 Pro', 'Pixel 11 Pro XL'])
   assert.match(template, /Development preview: example devices and configuration only, not real device data\./)
   dialog.selectedProduct.value = 'caiman_beta'
+  dialog.spoofBuild.value = false
+  dialog.spoofProps.value = true
+  dialog.spoofVendingBuild.value = true
   await dialog.apply()
   assert.equal(dialog.currentState.value.model, 'Pixel 9 Pro')
   assert.equal(dialog.currentState.value.spoof_build, false)
-  assert.equal(dialog.currentState.value.spoof_props, false)
+  assert.equal(dialog.currentState.value.spoof_props, true)
   assert.equal(dialog.currentState.value.spoof_vending_build, true)
   assert.deepEqual(dialog.calls, [])
 })
@@ -197,7 +219,7 @@ test('unreadable saved profiles remain unchanged until the user applies disable'
   assert.equal(dialog.currentState.value.enabled, false)
 })
 
-test('unreadable saved profiles can load a catalog and explicitly apply a Store-only replacement', async () => {
+test('unreadable saved profiles can load a catalog and explicitly apply a replacement', async () => {
   const dialog = dialogHarness({ state: new Error('unsupported profile schema 3') })
   await dialog.loadState(0)
   dialog.desiredEnabled.value = true
@@ -213,36 +235,47 @@ test('unreadable saved profiles can load a catalog and explicitly apply a Store-
   assert.match(template, /<template v-if="stateStatus !== 'loading'">/)
   assert.match(template, /v-if="stateStatus === 'ready' && currentState !== null"/)
   await dialog.apply()
-  assert.deepEqual(dialog.calls, [['bluejay_beta', false, false, true]])
+  assert.deepEqual(dialog.calls, [['bluejay_beta', true, true, false]])
   assert.equal(dialog.currentState.value.product, 'bluejay_beta')
   assert.ok(dialog.events.some(event => event[0] === 'changed'))
 })
 
-test('CLI no-options apply sends native positional Store-only flags and validates the response', async () => {
+test('CLI sends the selected positional spoof flags and validates the response', async () => {
   const { cli, calls } = cliHarness()
   const state = await cli.applyPifFingerprint('bluejay_beta')
-  assert.equal(state.spoof_vending_build, true)
+  assert.equal(state.spoof_build, true)
+  assert.equal(state.spoof_props, true)
+  assert.equal(state.spoof_vending_build, false)
   assert.deepEqual(calls, [[
     '/data/adb/omk/keymint',
-    ['--webui-apply-pif-fingerprint', 'bluejay_beta', '0', '0', '1'],
+    ['--webui-apply-pif-fingerprint', 'bluejay_beta', '1', '1', '0'],
   ]])
+
   const explicit = cliHarness()
-  await explicit.cli.applyPifFingerprint('bluejay_beta', false, false, true)
-  assert.deepEqual(explicit.calls, calls)
+  await explicit.cli.applyPifFingerprint('bluejay_beta', false, true, true)
+  assert.deepEqual(explicit.calls, [[
+    '/data/adb/omk/keymint',
+    ['--webui-apply-pif-fingerprint', 'bluejay_beta', '0', '1', '1'],
+  ]])
+
   for (const result of [
     { enabled: false }, profile({ product: 'caiman_beta' }),
-    profile({ spoof_build: true }), profile({ spoof_props: true }), profile({ spoof_vending_build: false }),
+    profile({ spoof_build: false }), profile({ spoof_props: false }), profile({ spoof_vending_build: true }),
   ]) {
     await assert.rejects(cliHarness(result).cli.applyPifFingerprint('bluejay_beta'), /unexpected PIF fingerprint state/)
   }
 })
 
-test('CLI rejects non Store-only flags and malformed products before invoking helpers', async () => {
+test('CLI accepts every boolean flag combination and rejects non-boolean flags', async () => {
   const { cli, calls, execCalls } = cliHarness()
-  for (const flags of [[true, false, true], [false, true, true], [false, false, false], ['false', false, true]]) {
+  for (const flags of [
+    [true, true, false], [true, false, false], [false, true, true], [false, false, false],
+  ]) {
+    await cli.applyPifFingerprint('bluejay_beta', ...flags)
+  }
+  for (const flags of [['false', false, true], [false, 'true', true], [false, false, 1]]) {
     await assert.rejects(cli.applyPifFingerprint('bluejay_beta', ...flags), /Invalid PIF spoofing options/)
   }
   await assert.rejects(cli.applyPifFingerprint('not a product'), /Invalid PIF product/)
-  assert.deepEqual(calls, [])
-  assert.deepEqual(execCalls, [])
+  assert.equal(calls.length, 4)
 })

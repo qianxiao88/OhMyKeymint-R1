@@ -8,6 +8,7 @@ import {
   MiuixProgressIndicator,
   MiuixRadioButtonPreference,
   MiuixSwitch,
+  MiuixSwitchPreference,
 } from 'miuix-vue'
 import MiuixBottomSheet from './StableBottomSheet.vue'
 import { Info, Refresh, Tune } from 'miuix-vue/icons'
@@ -31,9 +32,9 @@ let previewState: PifFingerprintState = {
   fingerprint: 'google/bluejay_beta/bluejay:CANARY/ZP11.260918.007/16484274:user/release-keys',
   security_patch: '2026-10-05',
   device_initial_sdk_int: 32,
-  spoof_build: false,
-  spoof_props: false,
-  spoof_vending_build: true,
+  spoof_build: true,
+  spoof_props: true,
+  spoof_vending_build: false,
 }
 
 const props = defineProps<{
@@ -56,6 +57,9 @@ const catalogStatus = ref<LoadStatus>('loading')
 const stateError = ref('')
 const catalogError = ref('')
 const desiredEnabled = ref(false)
+const spoofBuild = ref(true)
+const spoofProps = ref(true)
+const spoofVendingBuild = ref(false)
 const selectedProduct = ref<string | null>(RANDOM_SELECTION)
 let loadGeneration = 0
 let catalogRequested = false
@@ -123,6 +127,9 @@ function load(): void {
   stateError.value = ''
   catalogError.value = ''
   desiredEnabled.value = false
+  spoofBuild.value = true
+  spoofProps.value = true
+  spoofVendingBuild.value = false
   selectedProduct.value = RANDOM_SELECTION
   const generation = ++loadGeneration
   void loadState(generation)
@@ -138,6 +145,9 @@ async function loadState(generation: number): Promise<void> {
     if (!isActive(generation)) return
     currentState.value = state
     desiredEnabled.value = state.enabled
+    spoofBuild.value = state.enabled ? state.spoof_build : true
+    spoofProps.value = state.enabled ? state.spoof_props : true
+    spoofVendingBuild.value = state.enabled ? state.spoof_vending_build : false
     selectedProduct.value = state.enabled ? state.product : RANDOM_SELECTION
     stateStatus.value = 'ready'
     reconcileSelection()
@@ -214,9 +224,9 @@ async function apply(): Promise<void> {
         fingerprint: `google/${sample.product}/${sample.product.replace(/_beta$/, '')}:CANARY/ZP11.260918.007/16484274:user/release-keys`,
         security_patch: '2026-10-05',
         device_initial_sdk_int: sample.sdk,
-        spoof_build: false,
-        spoof_props: false,
-        spoof_vending_build: true,
+        spoof_build: spoofBuild.value,
+        spoof_props: spoofProps.value,
+        spoof_vending_build: spoofVendingBuild.value,
       } : { enabled: false }
       currentState.value = previewState
       emit('notify', tr('pif_preview_applied', 'Preview updated only; no phone settings were changed.'))
@@ -224,7 +234,7 @@ async function apply(): Promise<void> {
     }
     if (device) {
       const state = await props.cli.applyPifFingerprint(
-        device.product, false, false, true,
+        device.product, spoofBuild.value, spoofProps.value, spoofVendingBuild.value,
       )
       currentState.value = state
       emit('notify', tr(
@@ -286,6 +296,27 @@ async function apply(): Promise<void> {
             />
           </template>
         </MiuixBasicComponent>
+      </MiuixCard>
+
+      <MiuixCard v-if="desiredEnabled && stateStatus === 'ready'" class="pif-card" press-feedback="none">
+        <MiuixSwitchPreference
+          v-model="spoofBuild"
+          :title="tr('pif_spoof_build', 'Spoof Build')"
+          :summary="tr('pif_spoof_build_desc', 'Apply Pixel Build fields and the launch SDK to Google Play services only; the running Android SDK stays unchanged.')"
+          :disabled="busy"
+        />
+        <MiuixSwitchPreference
+          v-model="spoofVendingBuild"
+          :title="tr('pif_spoof_vending', 'Spoof Build (Play Store)')"
+          :summary="tr('pif_spoof_vending_desc', 'Apply the selected Pixel Build fields to Play Store, including model, fingerprint and patch date. Independent of GMS; SDK and native properties stay unchanged.')"
+          :disabled="busy"
+        />
+        <MiuixSwitchPreference
+          v-model="spoofProps"
+          :title="tr('pif_spoof_props', 'Spoof Props')"
+          :summary="tr('pif_spoof_props_desc', 'Override selected property reads in Google Play services only; global and Play Store properties stay unchanged.')"
+          :disabled="busy"
+        />
       </MiuixCard>
 
       <MiuixCard

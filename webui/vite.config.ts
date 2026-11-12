@@ -34,7 +34,6 @@ export default defineConfig(({ mode }) => {
     plugins: [variantComponents(variant), vue()],
     server: {
       host: '0.0.0.0',
-      allowedHosts: ['.monkeycode-ai.online'],
     },
     build: {
       target: 'chrome94',

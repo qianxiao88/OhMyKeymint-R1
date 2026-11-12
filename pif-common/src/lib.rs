@@ -35,7 +35,6 @@ pub struct PifProfile {
     pub security_patch: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_initial_sdk_int: Option<i32>,
-    // Preserve the v1/v2 wire defaults for validation before runtime normalization.
     #[serde(default = "enabled_by_default", skip_serializing_if = "is_enabled")]
     pub spoof_build: bool,
     #[serde(default = "enabled_by_default", skip_serializing_if = "is_enabled")]
@@ -122,9 +121,9 @@ impl PifProfile {
             tags: fingerprint.tags.to_string(),
             security_patch: source.security_patch,
             device_initial_sdk_int: source.device_initial_sdk_int,
-            spoof_build: false,
-            spoof_props: false,
-            spoof_vending_build: true,
+            spoof_build: true,
+            spoof_props: true,
+            spoof_vending_build: false,
         };
         profile.validate()?;
         Ok(profile)
@@ -187,33 +186,13 @@ impl PifProfile {
     }
 
     pub fn from_json(contents: &[u8]) -> Result<Self, String> {
-        Self::parse_json(contents, false)
-    }
-
-    pub fn from_canonical_json(contents: &[u8]) -> Result<Self, String> {
-        Self::parse_json(contents, true)
-    }
-
-    fn parse_json(contents: &[u8], require_canonical: bool) -> Result<Self, String> {
         if contents.len() > MAX_PROFILE_BYTES {
             return Err("PIF profile exceeds the 4 KiB limit".to_string());
         }
-        let mut profile: Self = serde_json::from_slice(contents)
+        let profile: Self = serde_json::from_slice(contents)
             .map_err(|error| format!("invalid PIF profile JSON: {error}"))?;
         profile.validate()?;
-        // Compare the original v1/v2 wire representation before changing scope.
-        if require_canonical && profile.to_canonical_json()?.as_bytes() != contents {
-            return Err("PIF profile is not canonical JSON".to_string());
-        }
-        profile.enforce_store_only();
         Ok(profile)
-    }
-
-    pub fn enforce_store_only(&mut self) {
-        self.version = PROFILE_VERSION;
-        self.spoof_build = false;
-        self.spoof_props = false;
-        self.spoof_vending_build = true;
     }
 
     pub fn initial_sdk_int(&self) -> i32 {
@@ -509,8 +488,6 @@ mod tests {
         assert_eq!(profile.build_type, "user");
         assert_eq!(profile.tags, "release-keys");
         assert_eq!(profile.build_fields().len(), 12);
-        assert!(!profile.spoof_build && !profile.spoof_props);
-        assert!(profile.spoof_vending_build);
     }
 
     #[test]
@@ -545,24 +522,19 @@ mod tests {
     }
 
     #[test]
-    fn legacy_profiles_validate_original_bytes_then_use_store_only() {
+    fn legacy_profiles_remain_canonical_and_default_to_enabled_paths() {
         let mut legacy = PifProfile::from_source(&selected(), PROP.as_bytes()).unwrap();
         legacy.version = 1;
-        legacy.spoof_build = true;
-        legacy.spoof_props = true;
-        legacy.spoof_vending_build = false;
         let json = legacy.to_canonical_json().unwrap();
         assert!(!json.contains("device_initial_sdk_int"));
         assert!(!json.contains("spoof_build"));
         assert!(!json.contains("spoof_props"));
         assert!(!json.contains("spoof_vending_build"));
-        let loaded = PifProfile::from_canonical_json(json.as_bytes()).unwrap();
-        assert_eq!(loaded.version, PROFILE_VERSION);
-        assert!(!loaded.spoof_build && !loaded.spoof_props);
-        assert!(loaded.spoof_vending_build);
+        let loaded = PifProfile::from_json(json.as_bytes()).unwrap();
+        assert_eq!(loaded.to_canonical_json().unwrap(), json);
+        assert!(loaded.spoof_build && loaded.spoof_props);
+        assert!(!loaded.spoof_vending_build);
         assert_eq!(loaded.initial_sdk_int(), 32);
-        assert_eq!(PifProfile::from_json(json.as_bytes()).unwrap(), loaded);
-        assert!(PifProfile::from_canonical_json(format!("{json}\n").as_bytes()).is_err());
         legacy.spoof_props = false;
         assert!(legacy.validate().is_err());
         legacy.spoof_props = true;
@@ -571,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn every_saved_v2_scope_is_normalized_to_store_only() {
+    fn profile_roundtrips_independent_spoof_options() {
         for spoof_build in [false, true] {
             for spoof_props in [false, true] {
                 for spoof_vending_build in [false, true] {
@@ -581,11 +553,7 @@ mod tests {
                     profile.spoof_props = spoof_props;
                     profile.spoof_vending_build = spoof_vending_build;
                     let json = profile.to_canonical_json().unwrap();
-                    let loaded = PifProfile::from_canonical_json(json.as_bytes()).unwrap();
-                    assert!(!loaded.spoof_build && !loaded.spoof_props);
-                    assert!(loaded.spoof_vending_build);
-                    assert_eq!(loaded.model, profile.model);
-                    assert_eq!(PifProfile::from_json(json.as_bytes()).unwrap(), loaded);
+                    assert_eq!(PifProfile::from_json(json.as_bytes()).unwrap(), profile);
                     assert_eq!(json.contains("spoof_vending_build"), spoof_vending_build);
                 }
             }
@@ -593,14 +561,13 @@ mod tests {
     }
 
     #[test]
-    fn profiles_without_store_option_normalize_and_reject_wrong_types() {
-        let mut profile = PifProfile::from_source(&selected(), PROP.as_bytes()).unwrap();
-        profile.spoof_vending_build = false;
+    fn profiles_without_store_option_remain_canonical_and_default_to_off() {
+        let profile = PifProfile::from_source(&selected(), PROP.as_bytes()).unwrap();
         let json = profile.to_canonical_json().unwrap();
         assert!(!json.contains("spoof_vending_build"));
-        let loaded = PifProfile::from_canonical_json(json.as_bytes()).unwrap();
-        assert!(!loaded.spoof_build && !loaded.spoof_props);
-        assert!(loaded.spoof_vending_build);
+        let loaded = PifProfile::from_json(json.as_bytes()).unwrap();
+        assert!(!loaded.spoof_vending_build);
+        assert_eq!(loaded.to_canonical_json().unwrap(), json);
         for value in ["1", "null", "\"true\""] {
             let invalid =
                 format!("{},\"spoof_vending_build\":{value}}}", json.trim_end_matches('}'));
