@@ -130,12 +130,12 @@ class PackageTests(unittest.TestCase):
                 finally:
                     self.stage = stage
                 results[variant] = manifest["hash"]
-                self.assertRegex(name, rf"^OhMyKeymint-R1-1\.3\.8-302-{variant}-[0-9a-f]{{7}}\.zip$")
+                self.assertRegex(name, rf"^OhMyKeymint-R1-1\.3\.8-303-{variant}-[0-9a-f]{{7}}\.zip$")
                 props = dict(line.split("=", 1) for line in entries["module.prop"][0].decode().splitlines())
                 self.assertEqual(props["name"], name[:-4])
                 self.assertEqual(props["author"], "James Clef,ITxiao6666," + r1.AUTHOR)
-                self.assertEqual(props["versionCode"], "302")
-                self.assertEqual(props["version"], f"1.3.8-302-{variant}")
+                self.assertEqual(props["versionCode"], "303")
+                self.assertEqual(props["version"], f"1.3.8-303-{variant}")
                 self.assertTrue(manifest["native_rebuilt"])
                 self.assertEqual(manifest["features"], list(r1.FEATURES[variant]))
                 self.assertEqual(manifest["injector_features"], list(r1.INJECTOR_FEATURES[variant]))
@@ -267,7 +267,7 @@ class PackageTests(unittest.TestCase):
         manifest = json.loads(entries["omk-payload.json"][0])
         self.assertEqual(set(manifest), {"schema", "id32", "version", "variant", "files"})
         self.assertEqual(manifest["id32"], r1.SKROOT_ID32)
-        self.assertEqual(manifest["version"], "1.3.8-302-full")
+        self.assertEqual(manifest["version"], "1.3.8-303-full")
         self.assertEqual(manifest["schema"], 1)
         self.assertEqual(manifest["files"], [{"path": path, "mode": mode, "sha256": r1.sha256(data)}
                                             for path, (data, mode) in sorted(payload.items())])

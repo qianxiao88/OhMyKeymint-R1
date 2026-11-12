@@ -18,7 +18,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "1.3.8"
-VERSION_CODE = 302
+VERSION_CODE = 303
 BRAND = f"{VERSION}-{VERSION_CODE}"
 AUTHOR = "\u6d45\u7b11\u5450"
 VARIANTS = ("full", "no-soter", "lite")

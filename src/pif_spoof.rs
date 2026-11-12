@@ -247,7 +247,7 @@ fn persist_profile(path: &Path, profile: &PifProfile, uid: u32, gid: u32) -> Res
     validate_profile_target(path)?;
     enforce_profile_metadata(path, uid, gid)?;
     let saved = load_profile(path)?.ok_or_else(|| anyhow!("PIF profile vanished after write"))?;
-    if saved != profile {
+    if saved != *profile {
         bail!("PIF profile read-back does not match the requested profile");
     }
     Ok(())
