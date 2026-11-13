@@ -500,7 +500,6 @@ fn complete_failed_transaction_submission(fd: c_int, cmd_nr: u32) {
 
 /// Share the existing completion/terminal-failure state machine with the
 /// SOTER-only role without dispatching Keystore rewrites or service discovery.
-#[cfg(feature = "soter")]
 pub(in crate::hook::intercept) fn observe_native_completion(fd: c_int, cmd: u32) {
     if cmd == BR_TRANSACTION_COMPLETE_CMD {
         complete_transaction_submission(fd);
