@@ -15,6 +15,7 @@ import {
   type PaletteStyle,
 } from '../appearance'
 import { i18n } from '../i18n'
+import type { Cli } from '../cli'
 import { afterPaint } from '../app_list/app_list'
 import { R1_AUTHOR, R1_MODULE_NAME } from '../r1'
 import {
@@ -25,14 +26,16 @@ import {
   MiuixDropdownPreference,
   MiuixIcon,
   MiuixIconButton,
+  MiuixProgressIndicator,
   MiuixRadioButtonPreference,
   MiuixSlider,
   MiuixSmallTitle,
   MiuixSpinnerPreference,
   MiuixSwitchPreference,
+  showSnackbar,
   MiuixTopAppBar,
 } from '../ui/miuix-compat'
-import { Background, Close, Layers, Photos, Sidebar, Tasks, Theme, Translate, Tune } from '../ui/icons'
+import { Background, Close, Download, Layers, Photos, Sidebar, Tasks, Theme, Translate, Tune } from '../ui/icons'
 
 interface Choice<T extends string> {
   value: T
@@ -106,10 +109,35 @@ let scalePointerCancelled = false
 const languageSheetOpen = ref(false)
 const visibleLanguageCount = ref(8)
 let languageRenderGeneration = 0
+const props = defineProps<{ cli: Cli }>()
+
 const emit = defineEmits<{
   'overlay-open': []
   'overlay-close': []
 }>()
+
+const logExportBusy = ref(false)
+
+async function exportLogs(): Promise<void> {
+  if (logExportBusy.value) return
+  logExportBusy.value = true
+  try {
+    const path = await props.cli.exportLogs()
+    void showSnackbar({
+      message: i18n.t('prompt_logs_exported', path),
+      duration: 'long',
+      withDismissAction: true,
+    })
+  } catch (error) {
+    void showSnackbar({
+      message: error instanceof Error ? error.message : String(error),
+      duration: 6000,
+      withDismissAction: true,
+    })
+  } finally {
+    logExportBusy.value = false
+  }
+}
 
 watch(languageSheetOpen, async open => {
   const generation = ++languageRenderGeneration
@@ -247,10 +275,10 @@ onBeforeUnmount(() => {
         {{ translate('settings_title', 'Settings') }}
       </h1>
 
-      <section class="settings-section" aria-labelledby="language-title">
+      <section class="settings-section" aria-labelledby="general-title">
         <MiuixSmallTitle
-          id="language-title"
-          :text="translate('settings_language', 'Language')"
+          id="general-title"
+          :text="translate('settings_general', 'General')"
         />
         <MiuixCard class="settings-card settings-card--single" press-feedback="none">
           <div class="settings-dropdown">
@@ -264,6 +292,41 @@ onBeforeUnmount(() => {
               </template>
             </MiuixArrowPreference>
           </div>
+
+          <div class="settings-divider"><MiuixDivider /></div>
+
+          <MiuixArrowPreference
+            :title="translate('settings_interface_scale', 'Interface scale')"
+            :summary="translate('settings_interface_scale_desc', 'Adjust the overall display size')"
+            :hold-down="showScaleSlider"
+            @click="showScaleSlider = !showScaleSlider"
+          >
+            <template #start>
+              <span class="settings-preference-icon"><MiuixIcon :icon="Tune" :size="22" /></span>
+            </template>
+            <template #end>
+              <span class="scale-preference__value">{{ interfaceScale }}%</span>
+            </template>
+            <template #bottom>
+              <MiuixSlider
+                v-if="showScaleSlider"
+                :model-value="interfaceScale"
+                :min="80"
+                :max="110"
+                :step="5"
+                :show-key-points="true"
+                :key-points="[80, 90, 100, 110]"
+                :aria-label="translate('settings_interface_scale', 'Interface scale')"
+                @update:model-value="setInterfaceScale"
+                @change-end="commitInterfaceScale"
+                @pointerdown.capture="scalePointerCancelled = false"
+                @pointercancel.capture="cancelScalePointer"
+                @keydown="onScaleKeydown"
+                @keyup="commitInterfaceScale"
+                @blur="commitInterfaceScale"
+              />
+            </template>
+          </MiuixArrowPreference>
         </MiuixCard>
       </section>
 
@@ -394,42 +457,25 @@ onBeforeUnmount(() => {
         </MiuixCard>
       </section>
 
-      <section class="settings-section" aria-labelledby="interaction-title">
+
+      <section class="settings-section" aria-labelledby="maintenance-title">
         <MiuixSmallTitle
-          id="interaction-title"
-          :text="translate('settings_interaction', 'Interaction')"
+          id="maintenance-title"
+          :text="translate('settings_maintenance', 'Maintenance')"
         />
         <MiuixCard class="settings-card" press-feedback="none">
           <MiuixArrowPreference
-            :title="translate('settings_interface_scale', 'Interface scale')"
-            :summary="translate('settings_interface_scale_desc', 'Adjust the overall display size')"
-            :hold-down="showScaleSlider"
-            @click="showScaleSlider = !showScaleSlider"
+            :title="translate('settings_export_logs', 'Export logs')"
+            :summary="translate('settings_export_logs_desc', 'Collect OMK logs into a support archive on shared storage')"
+            :disabled="logExportBusy"
+            :hold-down="logExportBusy"
+            @click="exportLogs"
           >
             <template #start>
-              <span class="settings-preference-icon"><MiuixIcon :icon="Tune" :size="22" /></span>
+              <span class="settings-preference-icon"><MiuixIcon :icon="Download" :size="22" /></span>
             </template>
             <template #end>
-              <span class="scale-preference__value">{{ interfaceScale }}%</span>
-            </template>
-            <template #bottom>
-              <MiuixSlider
-                v-if="showScaleSlider"
-                :model-value="interfaceScale"
-                :min="80"
-                :max="110"
-                :step="5"
-                :show-key-points="true"
-                :key-points="[80, 90, 100, 110]"
-                :aria-label="translate('settings_interface_scale', 'Interface scale')"
-                @update:model-value="setInterfaceScale"
-                @change-end="commitInterfaceScale"
-                @pointerdown.capture="scalePointerCancelled = false"
-                @pointercancel.capture="cancelScalePointer"
-                @keydown="onScaleKeydown"
-                @keyup="commitInterfaceScale"
-                @blur="commitInterfaceScale"
-              />
+              <MiuixProgressIndicator v-if="logExportBusy" type="circular" :size="20" />
             </template>
           </MiuixArrowPreference>
         </MiuixCard>

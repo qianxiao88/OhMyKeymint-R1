@@ -311,4 +311,16 @@
     <string name="home_access_refresh">Refresh</string>
     <string name="home_access_granted_notice">QQ group check passed.</string>
     <string name="home_access_denied_notice">Not in the QQ group. Service is stopped.</string>
+    <string name="settings_general">General</string>
+    <string name="settings_maintenance">Maintenance</string>
+    <string name="settings_export_logs">Export logs</string>
+    <string name="settings_export_logs_desc">Collect OMK logs into a support archive on shared storage</string>
+    <string name="prompt_logs_exported">Logs exported to %s</string>
+    <string name="tools_custom_patch">Custom security patch</string>
+    <string name="tools_custom_patch_desc">Enter a date such as 2026-05-01. A reboot is required.</string>
+    <string name="tools_custom_patch_label">Patch date</string>
+    <string name="tools_custom_patch_placeholder">2026-05-01</string>
+    <string name="tools_custom_patch_apply">Apply</string>
+    <string name="tools_custom_patch_invalid">Enter a valid date (YYYY-MM-DD).</string>
+    <string name="prompt_security_patch_custom_applied">Security patch set to %s. Please reboot the device.</string>
 </resources>

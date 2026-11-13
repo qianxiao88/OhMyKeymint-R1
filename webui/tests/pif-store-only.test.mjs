@@ -89,6 +89,10 @@ function cliHarness(result = args => profile({
   const code = stripTypeScriptTypes(`${securityPatch.replaceAll('export ', '')}\n${withoutImports(cliSource).replaceAll('export ', '')}\nnew Cli()`)
   const cli = vm.runInNewContext(code, {
     TextEncoder, TextDecoder,
+    // The helper runner arms a wall-clock guard with window.setTimeout, which
+    // the browser always provides; mirror it here so the harness matches.
+    window: { setTimeout, clearTimeout },
+    setTimeout, clearTimeout,
     exec: async command => {
       execCalls.push(command)
       return { errno: 0, stdout: 'arm64-v8a\naarch64\n', stderr: '' }
