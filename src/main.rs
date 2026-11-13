@@ -40,6 +40,10 @@ pub mod logging;
 pub mod macros;
 #[cfg(feature = "pif")]
 pub mod pif_spoof;
+// Pixel Canary resolution is part of the PIF feature set; the lite variant has
+// no `pif-common` dependency at all.
+#[cfg(feature = "pif")]
+mod pixel_canary;
 pub mod plat;
 pub mod proto;
 #[cfg(feature = "local-rkp")]
@@ -688,6 +692,35 @@ fn handle_webui_pif_command() -> Option<Result<String, String>> {
                 return Some(Err("--webui-list-pif-devices does not accept arguments".to_string()));
             }
             Some(pif_spoof::list_devices().map_err(|error| format!("{error:#}")))
+        }
+        "--webui-list-canary-devices" => {
+            if args.next().is_some() {
+                return Some(Err(
+                    "--webui-list-canary-devices does not accept arguments".to_string()
+                ));
+            }
+            Some(pif_spoof::list_canary_devices().map_err(|error| format!("{error:#}")))
+        }
+        "--webui-apply-canary-fingerprint" => {
+            let options: Vec<String> = args.collect();
+            let (spoof_build, spoof_props, spoof_vending_build) = match options.as_slice() {
+                [] => (true, true, false),
+                [build, props] if matches!(build.as_str(), "0" | "1")
+                    && matches!(props.as_str(), "0" | "1") => (build == "1", props == "1", false),
+                [build, props, vending] if matches!(build.as_str(), "0" | "1")
+                    && matches!(props.as_str(), "0" | "1")
+                    && matches!(vending.as_str(), "0" | "1") => {
+                    (build == "1", props == "1", vending == "1")
+                }
+                _ => return Some(Err(
+                    "--webui-apply-canary-fingerprint accepts optional spoofBuild spoofProps and spoofVendingBuild flags (0 or 1)".to_string(),
+                )),
+            };
+            prepare_android_storage();
+            Some(
+                pif_spoof::apply_canary_fingerprint(spoof_build, spoof_props, spoof_vending_build)
+                    .map_err(|error| format!("{error:#}")),
+            )
         }
         "--webui-apply-pif-fingerprint" => {
             let product = match args.next() {

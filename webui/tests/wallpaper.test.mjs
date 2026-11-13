@@ -179,7 +179,9 @@ test('wallpaper replacement and disable update the live surface and release prev
 function dialogHarness(storage) {
   const component = readFileSync(new URL('../src/vue/WallpaperDialog.vue', import.meta.url), 'utf8')
   const script = component.split('<script setup lang="ts">')[1].split('</script>')[0]
-    .replace(/^import .*$/gm, '')
+    // Multi-line import statements are stripped as a whole; a per-line regex
+    // would leave dangling `} from '...'` fragments behind.
+    .replace(/^import[\s\S]*? from ['"][^'"]+['"]\s*$/gm, '')
   let mounted, unmount, serial = 0
   const revoked = [], errors = []
   const properties = new Map()

@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import MiuixBottomSheet from './StableBottomSheet.vue'
+import { afterPaint } from '../app_list/app_list'
+import { Cli, type PifDevice, type PifFingerprintState } from '../cli'
+import { i18n } from '../i18n'
+import { isDev } from '../utils/dev'
 import {
   MiuixBasicComponent,
   MiuixButton,
@@ -9,13 +14,8 @@ import {
   MiuixRadioButtonPreference,
   MiuixSwitch,
   MiuixSwitchPreference,
-} from 'miuix-vue'
-import MiuixBottomSheet from './StableBottomSheet.vue'
-import { Info, Refresh, Tune } from 'miuix-vue/icons'
-import { afterPaint } from '../app_list/app_list'
-import { Cli, type PifDevice, type PifFingerprintState } from '../cli'
-import { i18n } from '../i18n'
-import { isDev } from '../utils/dev'
+} from '../ui/miuix-compat'
+import { Info, Refresh, Tune } from '../ui/icons'
 
 type LoadStatus = 'loading' | 'ready' | 'error'
 const RANDOM_SELECTION = '__random__'
@@ -54,6 +54,9 @@ const renderedDeviceCount = ref(0)
 const renderedDevices = computed(() => devices.value.slice(0, renderedDeviceCount.value))
 const stateStatus = ref<LoadStatus>('loading')
 const catalogStatus = ref<LoadStatus>('loading')
+// Where the current catalog came from. `canary` means the list was resolved live
+// from the Pixel Canary pipeline, so applying it must go through the same path.
+const catalogSource = ref<'canary' | 'mirror'>('canary')
 const stateError = ref('')
 const catalogError = ref('')
 const desiredEnabled = ref(false)
@@ -162,11 +165,24 @@ async function loadCatalog(generation: number): Promise<void> {
   try {
     await afterPaint()
     if (!isActive(generation)) return
-    const result = preview
-      ? previewDevices
-      : await props.cli.listPifDevices()
+    if (preview) {
+      devices.value = previewDevices
+      catalogSource.value = 'mirror'
+    } else {
+      // PlayIntegrityFork resolves one live Pixel Canary build. If the upstream
+      // pages are unreachable, fall back to the mirrored catalog rather than
+      // leaving the sheet empty.
+      try {
+        devices.value = await props.cli.listCanaryDevices()
+        catalogSource.value = 'canary'
+      } catch (canaryError) {
+        if (!isActive(generation)) return
+        devices.value = await props.cli.listPifDevices()
+        catalogSource.value = 'mirror'
+        console.warn('Pixel Canary resolution failed, using the mirrored catalog:', canaryError)
+      }
+    }
     if (!isActive(generation)) return
-    devices.value = result
     catalogStatus.value = 'ready'
     reconcileSelection()
   } catch (error) {
@@ -233,9 +249,13 @@ async function apply(): Promise<void> {
       return
     }
     if (device) {
-      const state = await props.cli.applyPifFingerprint(
-        device.product, spoofBuild.value, spoofProps.value, spoofVendingBuild.value,
-      )
+      const state = catalogSource.value === 'canary'
+        ? await props.cli.applyCanaryFingerprint(
+          spoofBuild.value, spoofProps.value, spoofVendingBuild.value,
+        )
+        : await props.cli.applyPifFingerprint(
+          device.product, spoofBuild.value, spoofProps.value, spoofVendingBuild.value,
+        )
       currentState.value = state
       emit('notify', tr(
         'prompt_pif_applied',

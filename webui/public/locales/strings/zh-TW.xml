@@ -223,4 +223,17 @@
     <string name="soter_cpu_invalid">CPU-ID 必須為 32 或 36 位十六進位字元。</string>
     <string name="soter_local_empty">請先在工具 → SOTER 本機身分中新增隨機身分。</string>
     <string name="soter_local_inactive">SOTER 總開關未啟用，請在工具中開啟後生效。</string>
+    <string name="home_access_title">QQ 群校驗</string>
+    <string name="home_access_loading">正在校驗</string>
+    <string name="home_access_granted">已通過</string>
+    <string name="home_access_denied">未通過</string>
+    <string name="home_access_disabled">未啟用校驗</string>
+    <string name="home_access_group">本模塊免費，需加入 QQ 群</string>
+    <string name="home_access_expires">有效期至</string>
+    <string name="home_access_qq_placeholder">輸入你的 QQ 號</string>
+    <string name="home_access_qq_label">QQ 號</string>
+    <string name="home_access_submit">校驗</string>
+    <string name="home_access_refresh">刷新</string>
+    <string name="home_access_granted_notice">QQ 群校驗通過。</string>
+    <string name="home_access_denied_notice">未在 QQ 群內，已停止服務。</string>
 </resources>

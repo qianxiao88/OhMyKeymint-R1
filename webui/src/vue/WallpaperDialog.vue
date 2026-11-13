@@ -1,8 +1,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { MiuixArrowPreference, MiuixButton, MiuixDialog, MiuixIcon, MiuixSwitchPreference } from 'miuix-vue'
-import { Photos } from 'miuix-vue/icons'
 import { validateWallpaper, wallpaperStorage, type WallpaperRecord } from '../wallpaper'
+import {
+  MiuixArrowPreference,
+  MiuixButton,
+  MiuixDialog,
+  MiuixIcon,
+  MiuixSwitchPreference,
+} from '../ui/miuix-compat'
+import { Photos } from '../ui/icons'
 
 const open = defineModel<boolean>({ default: false })
 const emit = defineEmits<{ notify: [message: string, error: boolean] }>()

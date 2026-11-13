@@ -177,7 +177,37 @@ pub fn download_android_security_bulletin(url: &str) -> Result<String> {
     )
 }
 
+#[cfg(not(feature = "pif"))]
+pub fn latest_security_patch_from_canary() -> Result<String> {
+    bail!("resolving a \"latest\" patch level requires the pif feature")
+}
+
+/// Resolve the newest published patch level through the PlayIntegrityFork
+/// (`autopif4.sh`) route: a fresh Pixel Canary build is resolved, and the
+/// security patch level carried by that build is used as the published date.
+///
+/// This replaces scraping the ASB overview page for the "latest" value. The
+/// result is a real calendar date that matches a shipping build, so the
+/// fingerprint and the patch level stay consistent.
+#[cfg(feature = "pif")]
+pub fn latest_security_patch_from_canary() -> Result<String> {
+    let build = crate::pixel_canary::resolve_canary(None)?;
+    if !config::is_security_patch_date(&build.security_patch) {
+        bail!("resolved Pixel Canary patch level is not a calendar date");
+    }
+    Ok(build.security_patch)
+}
+
 pub fn apply_webui_security_patch(value: &str) -> Result<String> {
+    // "latest" is resolved from the Pixel Canary build first, then handled as a
+    // concrete date by the regular synchronization path.
+    let resolved;
+    let value = if value.trim() == "latest" {
+        resolved = latest_security_patch_from_canary()?;
+        resolved.as_str()
+    } else {
+        value
+    };
     config::validate_security_patch_sync_value(value)?;
     let _lock = acquire_operation_lock()?;
     let config_file = config::load_config_file()

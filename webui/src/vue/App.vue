@@ -1,17 +1,5 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import {
-  MiuixDialog,
-  MiuixRadioButtonPreference,
-  MiuixSwitchPreference,
-  MiuixIcon,
-  MiuixButton,
-  MiuixNavigationBar,
-  MiuixProgressIndicator,
-  MiuixSnackbarHost,
-  showSnackbar,
-} from 'miuix-vue'
-import { All, Settings, Tune } from 'miuix-vue/icons'
 import { afterPaint, AppList, type AppListSnapshot } from '../app_list/app_list'
 import {
   Cli,
@@ -35,6 +23,18 @@ import ToolsView, { type ToolEvent } from './ToolsView.vue'
 import FileBrowserSheet from './FileBrowserSheet.vue'
 import WallpaperDialog from './WallpaperDialog.vue'
 import { HAS_SOTER, IS_LITE, toolAvailable } from '../r1'
+import {
+  MiuixButton,
+  MiuixDialog,
+  MiuixIcon,
+  MiuixNavigationBar,
+  MiuixProgressIndicator,
+  MiuixRadioButtonPreference,
+  MiuixSnackbarHost,
+  MiuixSwitchPreference,
+  showSnackbar,
+} from '../ui/miuix-compat'
+import { All, Settings, Tune } from '../ui/icons'
 // Theme initialization also runs in lite, where SettingsView is excluded.
 import '../appearance'
 import './app.scss'

@@ -1,22 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import {
-  MiuixArrowPreference,
-  MiuixCard,
-  MiuixDivider,
-  MiuixDropdownPreference,
-  MiuixIcon,
-  MiuixIconButton,
-  MiuixRadioButtonPreference,
-  MiuixSlider,
-  MiuixSmallTitle,
-  MiuixSpinnerPreference,
-  MiuixSwitchPreference,
-  MiuixTopAppBar,
-  type MiuixDropdownItem,
-} from 'miuix-vue'
 import MiuixBottomSheet from './StableBottomSheet.vue'
-import { Background, Close, Layers, Photos, Sidebar, Tasks, Theme, Translate, Tune } from 'miuix-vue/icons'
 import {
   ACCENT_COLORS,
   ACCENT_SEEDS,
@@ -33,6 +17,22 @@ import {
 import { i18n } from '../i18n'
 import { afterPaint } from '../app_list/app_list'
 import { R1_AUTHOR, R1_MODULE_NAME } from '../r1'
+import {
+  type MiuixDropdownItem,
+  MiuixArrowPreference,
+  MiuixCard,
+  MiuixDivider,
+  MiuixDropdownPreference,
+  MiuixIcon,
+  MiuixIconButton,
+  MiuixRadioButtonPreference,
+  MiuixSlider,
+  MiuixSmallTitle,
+  MiuixSpinnerPreference,
+  MiuixSwitchPreference,
+  MiuixTopAppBar,
+} from '../ui/miuix-compat'
+import { Background, Close, Layers, Photos, Sidebar, Tasks, Theme, Translate, Tune } from '../ui/icons'
 
 interface Choice<T extends string> {
   value: T

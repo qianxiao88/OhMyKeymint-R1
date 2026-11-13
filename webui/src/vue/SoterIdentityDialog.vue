@@ -1,13 +1,20 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { MiuixButton, MiuixCard, MiuixIconButton, MiuixIcon, MiuixProgressIndicator,
-  MiuixRadioButtonPreference, MiuixSwitchPreference } from 'miuix-vue'
-import { Close } from 'miuix-vue/icons'
 import MiuixBottomSheet from './StableBottomSheet.vue'
 import { type Cli, type SoterIdentityState } from '../cli'
 import { afterPaint } from '../app_list/app_list'
 import { i18n } from '../i18n'
 import { isDev } from '../utils/dev'
+import {
+  MiuixButton,
+  MiuixCard,
+  MiuixIcon,
+  MiuixIconButton,
+  MiuixProgressIndicator,
+  MiuixRadioButtonPreference,
+  MiuixSwitchPreference,
+} from '../ui/miuix-compat'
+import { Close } from '../ui/icons'
 
 const props = defineProps<{ modelValue: boolean, cli: Cli, target?: string, batchTargets?: string[] }>()
 const emit = defineEmits<{ 'update:modelValue': [open: boolean] }>()

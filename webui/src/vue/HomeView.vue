@@ -1,13 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import {
-  MiuixButton,
-  MiuixCard,
-  MiuixIcon,
-  MiuixProgressIndicator,
-  MiuixTopAppBar,
-} from 'miuix-vue'
-import { Info, Ok } from 'miuix-vue/icons'
 import type {
   DiagnosticsState,
   KeyboxLevel,
@@ -16,6 +8,14 @@ import type {
 } from '../cli'
 import { i18n } from '../i18n'
 import { IS_LITE, R1_MODULE_NAME } from '../r1'
+import {
+  MiuixButton,
+  MiuixCard,
+  MiuixIcon,
+  MiuixProgressIndicator,
+  MiuixTopAppBar,
+} from '../ui/miuix-compat'
+import { Info, Ok } from '../ui/icons'
 
 export type ModuleStatus = 'loading' | 'ready' | 'error'
 export type KeyboxStatus = 'loading' | 'bundled' | 'custom' | 'invalid' | 'error'

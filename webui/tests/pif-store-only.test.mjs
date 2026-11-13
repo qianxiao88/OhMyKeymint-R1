@@ -31,7 +31,11 @@ function dialogHarness({ state = profile(), preview = false, applyResult } = {})
       if (state instanceof Error) throw state.message
       return state
     },
+    // The dialog prefers the live Pixel Canary resolver and falls back to the
+    // mirrored catalog, so both entry points must be present in the mock.
+    listCanaryDevices: async () => { throw new Error('canary unavailable in tests') },
     listPifDevices: async () => { reads.push('catalog'); return [{ model: 'Pixel 6a', product: 'bluejay_beta' }] },
+    applyCanaryFingerprint: async () => { throw new Error('canary catalog is unavailable') },
     applyPifFingerprint: async (...args) => {
       calls.push(args)
       return applyResult
@@ -63,7 +67,7 @@ function dialogHarness({ state = profile(), preview = false, applyResult } = {})
     afterPaint: async () => {},
     isDev: () => preview,
     i18n: { t: key => key },
-    console: { error: (...args) => errors.push(args) },
+    console: { error: (...args) => errors.push(args), warn: () => {} },
   })
   const updateCatalog = async () => {
     for (const [sources, callback] of watchers) {

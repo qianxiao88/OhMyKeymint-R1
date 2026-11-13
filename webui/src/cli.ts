@@ -498,8 +498,12 @@ export class Cli {
     return output as { ok: boolean, reason: string, cloud_connected: boolean }
   }
 
-  async #runR1(action: 'cloud-update' | 'status'): Promise<Record<string, unknown>> {
-    const result = await exec(`${shellQuote('/data/adb/modules/oh_my_keymint/arm64-v8a/r1-helper')} ${shellQuote(action)}`)
+  async #runR1(
+    action: 'cloud-update' | 'status',
+    argument?: string,
+  ): Promise<Record<string, unknown>> {
+    const argumentSuffix = argument === undefined ? '' : ` ${shellQuote(argument)}`
+    const result = await exec(`${shellQuote('/data/adb/modules/oh_my_keymint/arm64-v8a/r1-helper')} ${shellQuote(action)}${argumentSuffix}`)
     if (result.errno !== 0) {
       throw new Error(result.stderr.trim() || `R1 helper exited with code ${result.errno}`)
     }
@@ -816,6 +820,47 @@ export class Cli {
       throw new Error('OMK returned duplicate PIF products')
     }
     return devices
+  }
+
+  /**
+   * Fetch one freshly resolved Pixel Canary device through the
+   * PlayIntegrityFork (`autopif4.sh`) pipeline. The helper resolves the build,
+   * its release date and its matching security patch level in one pass, so the
+   * fingerprint and the patch level can never disagree.
+   */
+  async listCanaryDevices(): Promise<PifDevice[]> {
+    const { keymint } = await this.#getHelperPaths()
+    const output = await this.#run(keymint, ['--webui-list-canary-devices'], MAX_PIF_CATALOG_BYTES)
+    const parsed = parseCanonicalJson(output, 'Pixel Canary catalog')
+    if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > MAX_PIF_DEVICES) {
+      throw new Error('OMK returned an invalid Pixel Canary catalog')
+    }
+    return parsed.map(parsePifDevice)
+  }
+
+  async applyCanaryFingerprint(
+    spoofBuild = true,
+    spoofProps = true,
+    spoofVendingBuild = false,
+  ): Promise<EnabledPifFingerprintState> {
+    if (typeof spoofBuild !== 'boolean' || typeof spoofProps !== 'boolean'
+        || typeof spoofVendingBuild !== 'boolean') {
+      throw new Error('Invalid PIF spoofing options')
+    }
+    const { keymint } = await this.#getHelperPaths()
+    const output = await this.#run(
+      keymint,
+      [
+        '--webui-apply-canary-fingerprint',
+        spoofBuild ? '1' : '0',
+        spoofProps ? '1' : '0',
+        spoofVendingBuild ? '1' : '0',
+      ],
+      MAX_PIF_STATE_BYTES,
+    )
+    const state = parsePifState(output)
+    if (!state.enabled) throw new Error('OMK did not enable the Pixel Canary fingerprint')
+    return state
   }
 
   async applyPifFingerprint(

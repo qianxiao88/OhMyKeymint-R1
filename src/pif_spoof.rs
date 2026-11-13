@@ -17,7 +17,7 @@ use pif_common::{
 use serde::Serialize;
 use ureq::http::Uri;
 
-use crate::{root_path, security_patch, webui_http};
+use crate::{pixel_canary, root_path, security_patch, webui_http};
 
 const PROFILE_PATH: &str = root_path!("data/pif_fingerprint.json");
 // GitHub Raw has a short cache window for the bot branch. Keep jsDelivr as a
@@ -89,6 +89,39 @@ struct EnabledState<'a> {
 pub fn list_devices() -> Result<String> {
     let entries = download_catalog()?;
     serde_json::to_string(&entries).context("failed to serialize PIF device catalog")
+}
+
+/// Fetch a fresh Pixel Canary fingerprint through the PlayIntegrityFork
+/// (`autopif4.sh`) pipeline instead of the mirrored `device_list.json` feed.
+///
+/// The same call resolves the matching security patch level, so the stored
+/// fingerprint and `ro.build.version.security_patch` cannot disagree.
+pub fn list_canary_devices() -> Result<String> {
+    let build = pixel_canary::resolve_canary(None)?;
+    let entries = vec![DeviceEntry { model: build.model, product: build.product }];
+    serde_json::to_string(&entries).context("failed to serialize the Pixel Canary catalog")
+}
+
+pub fn apply_canary_fingerprint(
+    spoof_build: bool,
+    spoof_props: bool,
+    spoof_vending_build: bool,
+) -> Result<String> {
+    let build = pixel_canary::resolve_canary(None)?;
+    let product = build.product.clone();
+    let mut profile = build.into_profile()?;
+    if profile.product != product {
+        bail!("resolved canary profile product does not match the selected build");
+    }
+    profile.spoof_build = spoof_build;
+    profile.spoof_props = spoof_props;
+    profile.spoof_vending_build = spoof_vending_build;
+
+    let path = Path::new(PROFILE_PATH);
+    let _lock = security_patch::acquire_data_operation_lock(path)?;
+    persist_profile(path, &profile, KEYSTORE_UID, KEYSTORE_GID)?;
+    refresh_target_processes()?;
+    state_json(Some(&profile))
 }
 
 pub fn fingerprint_state() -> Result<String> {

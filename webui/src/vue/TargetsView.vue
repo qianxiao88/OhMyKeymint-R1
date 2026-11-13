@@ -1,28 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance, ComputedRef } from 'vue'
-import {
-  MiuixButton,
-  MiuixCard,
-  MiuixIcon,
-  MiuixIconButton,
-  MiuixProgressIndicator,
-  MiuixSearchBar,
-  MiuixSwitchPreference,
-  MiuixTopAppBar,
-  showSnackbar,
-} from 'miuix-vue'
 import MiuixBottomSheet from './StableBottomSheet.vue'
-import {
-  AddCircle,
-  All,
-  Back,
-  Clear,
-  Close,
-  More,
-  Refresh,
-  SelectAll,
-} from 'miuix-vue/icons'
 import {
   afterPaint,
   type AppList,
@@ -34,6 +13,18 @@ import { isDev } from '../utils/dev'
 import TargetAppRow from './TargetAppRow.vue'
 import type SoterDialogType from './SoterIdentityDialog.vue'
 import { HAS_SOTER } from '../r1'
+import {
+  MiuixButton,
+  MiuixCard,
+  MiuixIcon,
+  MiuixIconButton,
+  MiuixProgressIndicator,
+  MiuixSearchBar,
+  MiuixSwitchPreference,
+  MiuixTopAppBar,
+  showSnackbar,
+} from '../ui/miuix-compat'
+import { AddCircle, All, Back, Clear, Close, More, Refresh, SelectAll } from '../ui/icons'
 
 const SoterIdentityDialog = HAS_SOTER ? defineAsyncComponent(() => import('./SoterIdentityDialog.vue')) : undefined
 

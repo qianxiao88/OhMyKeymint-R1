@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { MiuixCheckboxPreference, MiuixIcon } from 'miuix-vue'
-import { All, More } from 'miuix-vue/icons'
 import { HAS_SOTER } from '../r1'
+import {
+  MiuixCheckboxPreference,
+  MiuixIcon,
+} from '../ui/miuix-compat'
+import { All, More } from '../ui/icons'
 
 const props = defineProps<{
   packageName: string

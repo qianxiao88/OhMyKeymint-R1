@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { enableEdgeToEdge, isKsuWebui } from 'kernelsu-alt'
-import 'miuix-vue/style.css'
+import '@varlet/ui/es/style.mjs'
+import './ui/varlet-theme.scss'
 import { isSupported, renderBlockingPage } from './webview/webview'
 import App from './vue/App.vue'
 import { i18n } from './i18n'

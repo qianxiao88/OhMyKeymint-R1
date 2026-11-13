@@ -298,4 +298,17 @@
     <string name="soter_cpu_invalid">CPU-ID must be 32 or 36 hexadecimal characters.</string>
     <string name="soter_local_empty">Add a local identity from Tools > Local SOTER identities first.</string>
     <string name="soter_local_inactive">SOTER is disabled. Enable it in Tools for this assignment to take effect.</string>
+    <string name="home_access_title">QQ group check</string>
+    <string name="home_access_loading">Checking</string>
+    <string name="home_access_granted">Passed</string>
+    <string name="home_access_denied">Not passed</string>
+    <string name="home_access_disabled">Check disabled</string>
+    <string name="home_access_group">This module is free. Join the QQ group</string>
+    <string name="home_access_expires">valid until</string>
+    <string name="home_access_qq_placeholder">Enter your QQ number</string>
+    <string name="home_access_qq_label">QQ number</string>
+    <string name="home_access_submit">Verify</string>
+    <string name="home_access_refresh">Refresh</string>
+    <string name="home_access_granted_notice">QQ group check passed.</string>
+    <string name="home_access_denied_notice">Not in the QQ group. Service is stopped.</string>
 </resources>

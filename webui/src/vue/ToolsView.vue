@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import MiuixBottomSheet from './StableBottomSheet.vue'
+import { i18n } from '../i18n'
+import { HAS_SOTER, IS_LITE } from '../r1'
 import {
   MiuixArrowPreference,
   MiuixCard,
@@ -8,11 +11,8 @@ import {
   MiuixProgressIndicator,
   MiuixSmallTitle,
   MiuixTopAppBar,
-} from 'miuix-vue'
-import { AddCircle, BankCards, Close, Info, Lock, Photos, Replace, Reset, Update } from 'miuix-vue/icons'
-import MiuixBottomSheet from './StableBottomSheet.vue'
-import { i18n } from '../i18n'
-import { HAS_SOTER, IS_LITE } from '../r1'
+} from '../ui/miuix-compat'
+import { AddCircle, BankCards, Close, Info, Lock, Photos, Replace, Reset, Update } from '../ui/icons'
 
 export type ToolEvent =
   | 'cloudUpdate'

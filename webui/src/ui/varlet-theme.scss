@@ -1,0 +1,274 @@
+// Varlet 主题承接层。
+//
+// 三件事：
+//   1. 让 `--m-*`（原有 SCSS 的命名）与 Varlet 的 `--hsl-*` / `--color-*`
+//      指向同一批值 —— 后者由 appearance.ts 在运行时按 Monet 方案写入 :root。
+//   2. 补齐 Varlet 没有、但本项目一直在用的级联变量（安全区内边距、字号）。
+//   3. 深色模式跟随 `[data-theme-resolved]`，不再依赖 miuix 的 `m-theme-dark`。
+
+:root {
+  color-scheme: light dark;
+
+  // Varlet 用 rem 排版，这里保持与原有 SCSS 一致的 px 观感。
+  --var-font-size: inherit;
+}
+
+// ---- 字号：原来由 miuix-vue/style.css 提供，现在由本文件声明 ----
+:root {
+  --m-text-main-size: 17px;
+  --m-text-body1-size: 16px;
+  --m-text-body2-size: 14px;
+  --m-text-button-size: 17px;
+  --m-text-subtitle-size: 14px;
+  --m-text-title4-size: 18px;
+}
+
+// ---- Varlet 组件的圆角与高度向系统设置页靠拢 ----
+:root {
+  --cell-border-radius: 12px;
+  --card-border-radius: 16px;
+  --button-border-radius: 20px;
+  --popup-content-border-radius: 20px;
+  --snackbar-border-radius: 16px;
+  --dialog-border-radius: 24px;
+}
+
+// ---- 深色：Varlet 自身只有 class 主题，这里跟随本项目的 data 属性 ----
+:root[data-theme-resolved='dark'] {
+  color-scheme: dark;
+
+  --card-background: var(--color-surface-container);
+  --cell-background: transparent;
+  --popup-content-background: var(--color-surface-container-high);
+  --snackbar-background: var(--color-surface-container-highest);
+  --overlay-background: rgb(0 0 0 / 55%);
+}
+
+:root[data-theme-resolved='light'] {
+  --card-background: var(--color-surface-container);
+  --popup-content-background: var(--color-surface-container-lowest, #fff);
+  --overlay-background: rgb(0 0 0 / 32%);
+}
+
+// AMOLED：把 Varlet 的实体面拉到纯黑，与原 `amoled` 模式一致。
+:root[data-theme-mode='amoled'] {
+  --card-background: #000;
+  --popup-content-background: #0a0a0a;
+  --snackbar-background: #141414;
+}
+
+// ---- 兼容层用到的结构类 ----
+.m-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: inherit;
+
+  svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+}
+
+.m-button.var-button {
+  // Varlet 的 text 按钮默认内边距偏小，保留 miuix 的点击区尺寸。
+  min-height: 40px;
+  padding-inline: 18px;
+  font-size: var(--m-text-button-size, 17px);
+}
+
+.m-dialog {
+  &__inner {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px;
+    max-width: min(92vw, 480px);
+    background: var(--popup-content-background);
+    color: var(--color-text);
+  }
+
+  &__title {
+    font-size: var(--m-text-title4-size, 18px);
+    font-weight: 600;
+  }
+
+  &__body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    font-size: var(--m-text-body1-size, 16px);
+    line-height: 1.5;
+  }
+}
+
+.m-bottom-sheet {
+  &__inner {
+    display: flex;
+    flex-direction: column;
+    max-height: 82vh;
+    background: var(--popup-content-background);
+    color: var(--color-text);
+  }
+
+  &__header {
+    display: grid;
+    grid-template-columns: 48px 1fr 48px;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    min-height: 56px;
+  }
+
+  &__title {
+    text-align: center;
+    font-size: var(--m-text-main-size, 17px);
+    font-weight: 600;
+  }
+
+  &__body {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 12px 12px;
+    // 触摸滚动交给内容区，避免 Popup 的锁滚动与外层页面抢手势。
+    touch-action: pan-y;
+  }
+
+  &__footer {
+    padding: 12px;
+    border-top: 1px solid var(--color-outline-variant, rgb(0 0 0 / 8%));
+  }
+}
+
+.m-picker-sheet {
+  &__inner {
+    max-height: 60vh;
+    overflow-y: auto;
+    padding: 8px 12px 12px;
+    background: var(--popup-content-background);
+  }
+
+  &__title {
+    padding: 12px 4px;
+    font-size: var(--m-text-subtitle-size, 14px);
+    color: var(--color-text-secondary);
+  }
+
+  &__row--active {
+    background: var(--color-primary-container);
+    border-radius: 12px;
+  }
+}
+
+.m-navigation-bar {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-around;
+  padding-bottom: var(--omk-bottom-inset, 0px);
+
+  &__item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 8px 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+
+    &--active {
+      color: var(--color-primary);
+    }
+  }
+
+  &__label {
+    line-height: 1.1;
+  }
+}
+
+.m-top-app-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+
+  &__title {
+    flex: 1;
+    font-size: var(--m-text-title4-size, 18px);
+    font-weight: 600;
+  }
+
+  &__navigation,
+  &__actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    &:empty { display: none; }
+  }
+}
+
+// 设置行：把 Varlet 的 cell 拉成原来的三栏行（标题 / 描述 / 右侧控件）。
+.m-basic-component,
+.m-arrow-preference,
+.m-switch-preference,
+.m-checkbox-preference,
+.m-radio-button-preference,
+.m-dropdown-preference {
+  --cell-padding: 12px 16px;
+  --cell-title-font-size: var(--m-text-body1-size, 16px);
+  --cell-description-font-size: var(--m-text-body2-size, 14px);
+
+  &--disabled {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+}
+
+.m-radio-button-preference--selected {
+  background: var(--color-primary-container);
+  border-radius: 12px;
+}
+
+.m-divider.var-divider {
+  margin: 0;
+  opacity: 0.6;
+}
+
+.m-small-title {
+  padding: 16px 16px 8px;
+  font-size: var(--m-text-subtitle-size, 14px);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.m-search-bar.var-input {
+  --input-padding: 0 12px;
+  border-radius: 18px;
+  background: var(--color-surface-container-high);
+}
+
+// 兼容层里仍然走 miuix 类名的图标按钮（原来的 .m-icon-button 样式在 app.scss）。
+button.m-icon-button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 8px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+
+  &--disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+}
