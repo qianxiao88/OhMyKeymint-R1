@@ -36,6 +36,7 @@ pub mod keymint;
 pub mod local_rkp;
 #[cfg(feature = "local-rkp")]
 pub mod local_rkp_artifacts;
+pub mod log_export;
 pub mod logging;
 pub mod macros;
 #[cfg(feature = "pif")]
@@ -692,6 +693,16 @@ fn handle_webui_pif_command() -> Option<Result<String, String>> {
                 return Some(Err("--webui-list-pif-devices does not accept arguments".to_string()));
             }
             Some(pif_spoof::list_devices().map_err(|error| format!("{error:#}")))
+        }
+        "--webui-export-logs" => {
+            if args.next().is_some() {
+                return Some(Err("--webui-export-logs does not accept arguments".to_string()));
+            }
+            Some(
+                crate::log_export::export_logs()
+                    .map(|path| path.display().to_string())
+                    .map_err(|error| format!("{error:#}")),
+            )
         }
         "--webui-list-canary-devices" => {
             if args.next().is_some() {
