@@ -39,7 +39,6 @@ const MAX_RELEASE_BYTES: usize = 512 * 1024;
 const MAX_REDIRECTS: usize = 4;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const CANARY_EXPIRY_WEEKS: u64 = 6;
 
 /// Device -> `ro.product.first_api_level`, copied from `autopif4.sh`.
 fn first_api_level(device: &str) -> i32 {
@@ -60,15 +59,9 @@ pub struct CanaryBuild {
     pub model: String,
     pub product: String,
     pub device: String,
-    pub release_candidate: String,
-    pub build_id: String,
-    pub incremental: String,
-    pub android_release: String,
     pub fingerprint: String,
     pub security_patch: String,
     pub device_initial_sdk_int: i32,
-    pub released_on: Option<String>,
-    pub expires_on: Option<String>,
 }
 
 impl CanaryBuild {
@@ -212,7 +205,7 @@ fn client_config_key(html: &str) -> Option<String> {
     (!key.is_empty() && key.len() <= 128).then(|| key.to_string())
 }
 
-fn parse_canary(json: &str) -> Option<(String, String, String, String, String)> {
+fn parse_canary(json: &str) -> Option<(String, String, String)> {
     let value: Value = serde_json::from_str(json).ok()?;
     let builds = value.get("builds").and_then(Value::as_array)?;
     // `tac ... | grep -m1 -A13 '"canary": true'` — newest canary entry.
@@ -223,31 +216,11 @@ fn parse_canary(json: &str) -> Option<(String, String, String, String, String)> 
     let field = |name: &str| canary.get(name).and_then(Value::as_str).map(str::to_string);
     let release = field("releaseCandidateName")?;
     let incremental = field("buildId")?;
-    let android_release = field("releaseTrackVersionName").unwrap_or_default();
-    let image = field("factoryImageDownloadUrl").unwrap_or_default();
     let canary_id = field("canaryId").or_else(|| field("id")).unwrap_or_default();
-    Some((release, incremental, android_release, image, canary_id))
+    Some((release, incremental, canary_id))
 }
 
-fn head_last_modified(url: &str) -> Option<String> {
-    let uri: ureq::http::Uri = url.parse().ok()?;
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .https_only(true)
-        .max_redirects(0)
-        .timeout_connect(Some(CONNECT_TIMEOUT))
-        .timeout_global(Some(REQUEST_TIMEOUT))
-        .build()
-        .into();
-    let response = agent.head(uri).call().ok()?;
-    response
-        .headers()
-        .get("last-modified")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
-}
-
-/// `Mon, 05 Aug 2026 00:00:00 GMT` -> `2026-08-05`. Implemented without chrono
-/// so the module keeps its current dependency set.
+#[cfg(test)]
 fn parse_http_date(value: &str) -> Option<(i64, String)> {
     let mut parts = value.split_whitespace();
     let _weekday = parts.next()?;
@@ -276,6 +249,7 @@ fn parse_http_date(value: &str) -> Option<(i64, String)> {
 }
 
 /// Days since 1970-01-01 (Howard Hinnant's algorithm).
+#[cfg(test)]
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = if year >= 0 { year } else { year - 399 } / 400;
@@ -286,6 +260,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+#[cfg(test)]
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -391,23 +366,12 @@ pub fn resolve_canary(match_device: Option<&str>) -> Result<CanaryBuild> {
     let builds_url =
         format!("{FLASH_API}?product={}&key={}", percent_encode(&chosen.1), percent_encode(&key));
     let builds = fetch(&builds_url, allowed, MAX_RELEASE_BYTES, "Flash Station builds")?;
-    let (release, incremental, android_release, image, canary_id) =
+    let (release, incremental, canary_id) =
         parse_canary(&builds).ok_or_else(|| anyhow!("Flash Station returned no canary build"))?;
 
     // `20260805` -> `2026-08-05`
     let canary_date = (canary_id.len() == 8 && canary_id.bytes().all(|b| b.is_ascii_digit()))
         .then(|| format!("{}-{}-{}", &canary_id[..4], &canary_id[4..6], &canary_id[6..]));
-
-    let (released_on, expires_on) = match head_last_modified(&image) {
-        Some(value) => match parse_http_date(&value) {
-            Some((days, date)) => {
-                let (year, month, day) = civil_from_days(days + 7 * CANARY_EXPIRY_WEEKS as i64);
-                (Some(date), Some(format!("{year:04}-{month:02}-{day:02}")))
-            }
-            None => (None, None),
-        },
-        None => (None, None),
-    };
 
     let bulletin = fetch(PIXEL_BULLETIN_URL, allowed, MAX_PAGE_BYTES, "Pixel update bulletins")?;
     let security_patch = bulletin_security_patch(&bulletin, &incremental)
@@ -424,17 +388,11 @@ pub fn resolve_canary(match_device: Option<&str>) -> Result<CanaryBuild> {
         fingerprint: format!(
             "google/{product}/{device}:CANARY/{release}/{incremental}:user/release-keys"
         ),
-        incremental: incremental.clone(),
         model: chosen.0,
         device_initial_sdk_int: first_api_level(&device),
         security_patch,
         product,
         device,
-        release_candidate: release,
-        build_id: incremental,
-        android_release,
-        released_on,
-        expires_on,
     })
 }
 
@@ -504,7 +462,7 @@ mod tests {
             {"canary":true,"releaseCandidateName":"BP2A.260805.001","buildId":"16004061",
              "releaseTrackVersionName":"17","factoryImageDownloadUrl":"https://x/y.zip",
              "canaryId":"2026-08-05"}]}"#;
-        let (release, incremental, _, _, canary) = parse_canary(json).unwrap();
+        let (release, incremental, canary) = parse_canary(json).unwrap();
         assert_eq!(release, "BP2A.260805.001");
         assert_eq!(incremental, "16004061");
         assert_eq!(canary, "2026-08-05");

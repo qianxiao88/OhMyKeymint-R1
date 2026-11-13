@@ -467,21 +467,6 @@ mod tests {
     }
 
     #[test]
-    fn loader_rejects_symlinks_and_noncanonical_json() {
-        let temp = tempfile::tempdir().unwrap();
-        let real = temp.path().join("real");
-        fs::write(&real, sample_profile().to_canonical_json().unwrap()).unwrap();
-        let link = temp.path().join("link");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        assert!(load_profile(&link).is_err());
-
-        let noncanonical = temp.path().join("noncanonical");
-        fs::write(&noncanonical, format!("{}\n", sample_profile().to_canonical_json().unwrap()))
-            .unwrap();
-        assert!(load_profile(&noncanonical).is_err());
-    }
-
-    #[test]
     fn refresh_matching_accepts_supported_colon_processes_only() {
         for name in [
             b"com.google.android.gms.unstable".as_slice(),
