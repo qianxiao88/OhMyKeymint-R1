@@ -23,6 +23,7 @@ export function variantComponents(variant: string): Plugin | undefined {
   }
 }
 
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', 'VITE_R1_')
   const variant = env.VITE_R1_VARIANT || 'full'
@@ -31,7 +32,7 @@ export default defineConfig(({ mode }) => {
   }
   return {
     base: '',
-    plugins: [variantComponents(variant), vue()],
+    plugins: [variantComponents(variant), vue(), stripCrossorigin()],
     server: {
       host: '0.0.0.0',
     },
@@ -44,3 +45,25 @@ export default defineConfig(({ mode }) => {
     },
   }
 })
+
+/**
+ * Drop the `crossorigin` attribute Vite adds to the emitted module script and
+ * preload links.
+ *
+ * Module scripts are fetched in CORS mode when the attribute is present, so the
+ * manager container must answer with `Access-Control-Allow-Origin` for the page
+ * to run at all. KernelSU-derived managers serve the module webroot themselves
+ * and several of them do not, which leaves a completely blank page with no
+ * console output the user can see. These files are always same-origin, so the
+ * attribute buys nothing and only adds a failure mode.
+ */
+export function stripCrossorigin(): Plugin {
+  return {
+    name: 'r1-strip-crossorigin',
+    apply: 'build',
+    enforce: 'post',
+    transformIndexHtml(html) {
+      return html.replace(/ crossorigin(?:="[^"]*")?/g, '')
+    },
+  }
+}

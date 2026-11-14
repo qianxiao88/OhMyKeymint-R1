@@ -68,7 +68,7 @@ test('build resolver excludes optional component sources before Vue compilation'
     assert.equal(plugin.resolveId('./HomeView.vue'), null)
     assert.equal(plugin.load('/real/component.vue'), null)
   }
-  assert.match(config, /plugins: \[variantComponents\(variant\), vue\(\)\]/)
+  assert.match(config, /plugins: \[variantComponents\(variant\), vue\(\), stripCrossorigin\(\)\]/)
 })
 
 const app = readFileSync(new URL('../src/vue/App.vue', import.meta.url), 'utf8')
