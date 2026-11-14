@@ -701,8 +701,8 @@ defineExpose({
 
 :root[data-bar-blur='true'][data-backdrop-blur-supported='true'] .targets-top-bar {
   background: color-mix(in srgb, var(--m-color-surface) 92%, transparent);
-  -webkit-backdrop-filter: blur(18px) saturate(1.25);
-  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: saturate(1.25);
+  backdrop-filter: saturate(1.25);
 }
 
 .targets-top-bar :deep(.m-top-app-bar__nav) {
@@ -752,8 +752,8 @@ defineExpose({
 
 :root[data-bar-blur='true'][data-backdrop-blur-supported='true'] .targets-menu-popup {
   background: color-mix(in srgb, var(--m-color-surface-container) 96%, transparent);
-  -webkit-backdrop-filter: blur(22px) saturate(1.15);
-  backdrop-filter: blur(22px) saturate(1.15);
+  -webkit-backdrop-filter: saturate(1.15);
+  backdrop-filter: saturate(1.15);
 }
 
 .targets-menu-popup::-webkit-scrollbar {

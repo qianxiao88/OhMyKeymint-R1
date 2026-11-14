@@ -31,7 +31,7 @@ html::before {
   position: fixed;
   inset: 0;
   z-index: 0;
-  background-image: var(--r1-wallpaper, none);
+  background-image: var(--r1-wallpaper, url('../assets/default-wallpaper.jpg'));
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
@@ -67,8 +67,8 @@ html:root:is(html, #app) {
     border: 1px solid var(--r1-edge) !important;
     border-radius: 24px;
     box-shadow: inset 0 1px 0 var(--r1-edge), 0 4px 16px var(--r1-shadow) !important;
-    -webkit-backdrop-filter: blur(4px) !important;
-    backdrop-filter: blur(4px) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
     color: var(--r1-ink);
   }
 
@@ -169,23 +169,23 @@ html:root:is(html, #app) {
   // Stronger local glass keeps menus legible while the page stays transparent.
   .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup {
     background: var(--r1-control) !important;
-    -webkit-backdrop-filter: blur(6px) !important;
-    backdrop-filter: blur(6px) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
   }
   :is(.m-icon-button, .target-app-settings) {
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
     box-shadow: inset 0 0 0 1px var(--r1-edge);
   }
   .targets-menu-popup {
     background: var(--r1-control) !important;
-    -webkit-backdrop-filter: blur(6px) !important;
-    backdrop-filter: blur(6px) !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
   }
   .m-dialog__backdrop, .m-bottom-sheet__backdrop { background: transparent; }
   .m-bottom-sheet__overscroll { background: transparent; }
 
-  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @supports not ((backdrop-filter: none) or (-webkit-backdrop-filter: none)) {
     :is(.m-card, .m-surface, .target-app-row, .main-navigation,
         .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup) {
       background: var(--r1-control) !important;

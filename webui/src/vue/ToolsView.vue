@@ -13,6 +13,7 @@ import {
 import { AddCircle, BankCards, Close, Edit, Info, Lock, Photos, Replace, Reset, Update } from 'miuix-vue/icons'
 import MiuixBottomSheet from './StableBottomSheet.vue'
 import { i18n } from '../i18n'
+import { HAS_SOTER } from '../r1'
 import { isSecurityPatchDate } from '../security_patch'
 
 export type ToolEvent =
@@ -169,7 +170,7 @@ const feedbackRow: ToolRow = {
   event: 'feedback',
   icon: Info,
   title: tr('tools_feedback_group', '点击加入反馈群'),
-  summary: tr('tools_feedback_group_desc', '点击加入反馈群，不懂的先看公告再进行有效反馈。'),
+  summary: tr('tools_feedback_group_desc', '点击加入反馈群，不懂的先看公告再进行有效反馈。如觉得此模块不错。可以捐赠一下吗？感谢您的使用。'),
 }
 const wallpaperRow: ToolRow = {
   key: 'wallpaper',
@@ -208,13 +209,14 @@ const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => [
         title: tr('tools_rkp', 'Remote key provisioning'),
         summary: tr('tools_rkp_desc', 'Fix RKP or issue a local RKP Keybox.'),
       },
-      {
+      // A no-soter build compiles the dialog out, so the row must disappear too.
+      ...(HAS_SOTER ? [{
         key: 'soter',
-        event: 'openSoterLocal',
+        event: 'openSoterLocal' as const,
         icon: BankCards,
         title: tr('soter_local_title', 'Local SOTER identities'),
         summary: tr('soter_local_tool_desc', 'Create random local identities and set app CPU-ID overrides.'),
-      },
+      }] : []),
     ],
   },
   {

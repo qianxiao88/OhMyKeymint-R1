@@ -26,7 +26,9 @@ import { History } from '../history'
 import { i18n } from '../i18n'
 import { fetchLatestSecurityPatch } from '../security_patch'
 import { isDev } from '../utils/dev'
+import { IS_LITE } from '../r1'
 import HomeView, { type KeyboxStatus, type ModuleStatus, type TeeStatus } from './HomeView.vue'
+import LiteActions from './LiteActions.vue'
 import PifFingerprintDialog from './PifFingerprintDialog.vue'
 import SettingsView from './SettingsView.vue'
 import SoterIdentityDialog from './SoterIdentityDialog.vue'
@@ -96,11 +98,14 @@ const settingsView = ref<InstanceType<typeof SettingsView> | null>(null)
 const toolsView = ref<InstanceType<typeof ToolsView> | null>(null)
 const pifDialog = ref<InstanceType<typeof PifFingerprintDialog> | null>(null)
 
-const pageIds = ['home', 'tools', 'settings'] as const
+// The lite variant ships a single page: every action it keeps lives on Home.
+const pageIds = (IS_LITE ? ['home'] : ['home', 'tools', 'settings']) as readonly string[]
 const navItems = computed(() => [
   { label: i18n.t('nav_home') === 'nav_home' ? 'Home' : i18n.t('nav_home') },
-  { label: i18n.t('nav_tools') === 'nav_tools' ? 'Tools' : i18n.t('nav_tools') },
-  { label: i18n.t('nav_settings') === 'nav_settings' ? 'Settings' : i18n.t('nav_settings') },
+  ...(IS_LITE ? [] : [
+    { label: i18n.t('nav_tools') === 'nav_tools' ? 'Tools' : i18n.t('nav_tools') },
+    { label: i18n.t('nav_settings') === 'nav_settings' ? 'Settings' : i18n.t('nav_settings') },
+  ]),
 ])
 
 let unsubscribeAppList: (() => void) | null = null
@@ -896,10 +901,27 @@ watch(rkpImportConfirmOpen, open => {
           :security-patch="securityPatch"
           :spoofed-device="spoofedDevice"
           @refresh-diagnostics="refreshDiagnostics"
-        />
+        >
+          <LiteActions
+            v-if="IS_LITE"
+            :cli="cli"
+            :security-patch="securityPatch"
+            :security-patch-busy="securityPatchBusy"
+            :maintenance-busy="maintenanceBusy"
+            :cloud-busy="cloudBusy"
+            @open-app-targets="onTool('openAppTargets')"
+            @cloud-update="onTool('cloudUpdate')"
+            @clear-gms-cache="onTool('clearGmsCache')"
+            @sync-security-patch="onTool('syncSecurityPatch')"
+            @restore-security-patch="onTool('restoreSecurityPatch')"
+            @apply-security-patch="applyPatchDate"
+            @wallpaper="onTool('wallpaper')"
+          />
+        </HomeView>
       </Transition>
       <Transition name="page-switch">
         <ToolsView
+          v-if="!IS_LITE"
           v-show="pageIndex === 1"
           :security-patch-busy="securityPatchBusy"
           :maintenance-busy="maintenanceBusy"
@@ -926,6 +948,7 @@ watch(rkpImportConfirmOpen, open => {
       </Transition>
       <Transition name="page-switch">
         <SettingsView
+          v-if="!IS_LITE"
           v-show="pageIndex === 2"
           ref="settingsView"
           :cli="cli"

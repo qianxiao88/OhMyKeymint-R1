@@ -59,8 +59,8 @@ const DEFAULT_COLOR_SPEC: ColorSpec = 'SPEC_2025'
 const DEFAULT_OPTIONS: Readonly<Record<AppearanceOption, boolean>> = {
   monet: true,
   barBlur: false,
-  floatingBottomBar: false,
-  liquidGlass: false,
+  floatingBottomBar: true,
+  liquidGlass: true,
 }
 const THEME_QUERY = 'theme'
 const ACCENT_QUERY = 'accent'

@@ -261,5 +261,9 @@ const identityRows = computed(() => [
       </MiuixBasicComponent>
     </MiuixCard>
 
+    <!-- The lite variant appends its quick actions here; other variants
+         render nothing and keep the page identical to upstream. -->
+    <slot />
+
   </section>
 </template>

@@ -149,7 +149,10 @@ test('wallpaper replacement and disable update the live surface and release prev
   const revoked = []
   const properties = new Map()
   const document = { documentElement: {
-    style: { setProperty: (key, value) => properties.set(key, value) }, dataset: {},
+    style: {
+      setProperty: (key, value) => properties.set(key, value),
+      removeProperty: key => properties.delete(key),
+    },
   } }
   const surface = vm.runInNewContext(`
     let disposed = false, objectUrl = null, saved;
@@ -163,16 +166,16 @@ test('wallpaper replacement and disable update the live surface and release prev
   assert.equal(properties.get('--r1-wallpaper'), 'url("blob:wallpaper-1")')
   surface.apply({ enabled: true, blob: png(1280, 720) })
   assert.equal(properties.get('--r1-wallpaper'), 'url("blob:wallpaper-2")')
+  // Disabling a custom wallpaper drops the override so the bundled default shows.
   surface.apply({ enabled: false, blob: png() })
-  assert.equal(properties.get('--r1-wallpaper'), 'none')
-  assert.equal(document.documentElement.dataset.r1Wallpaper, 'false')
+  assert.equal(properties.has('--r1-wallpaper'), false)
   assert.equal(surface.enabled.value, false)
   assert.equal(surface.hasImage.value, true)
   assert.deepEqual(revoked, ['blob:wallpaper-1', 'blob:wallpaper-2'])
   surface.apply({ enabled: true, blob: png() })
   surface.apply({ enabled: false, blob: null })
   assert.equal(surface.hasImage.value, false)
-  assert.equal(properties.get('--r1-wallpaper'), 'none')
+  assert.equal(properties.has('--r1-wallpaper'), false)
   assert.deepEqual(revoked, ['blob:wallpaper-1', 'blob:wallpaper-2', 'blob:wallpaper-3'])
 })
 
@@ -222,7 +225,6 @@ test('dialog keeps disabling separate from removal and releases URLs on removal 
   dialog.unmount()
   assert.deepEqual(dialog.revoked, ['blob:dialog-1', 'blob:dialog-2', 'blob:dialog-3'])
   assert.equal(dialog.properties.has('--r1-wallpaper'), false)
-  assert.equal(dialog.document.documentElement.dataset.r1Wallpaper, undefined)
   dialog.apply({ enabled: true, blob: png() })
   assert.equal(dialog.properties.size, 0)
 })

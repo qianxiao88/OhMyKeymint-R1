@@ -24,8 +24,9 @@ function apply(record: WallpaperRecord): void {
   if (disposed) return
   const previous = objectUrl
   objectUrl = record.enabled && record.blob ? URL.createObjectURL(record.blob) : null
-  document.documentElement.style.setProperty('--r1-wallpaper', objectUrl ? `url("${objectUrl}")` : 'none')
-  document.documentElement.dataset.r1Wallpaper = String(!!objectUrl)
+  // An empty custom record falls back to the bundled default wallpaper.
+  if (objectUrl) document.documentElement.style.setProperty('--r1-wallpaper', `url("${objectUrl}")`)
+  else document.documentElement.style.removeProperty('--r1-wallpaper')
   if (previous) URL.revokeObjectURL(previous)
   saved = record
   enabled.value = record.enabled
@@ -80,7 +81,6 @@ onBeforeUnmount(() => {
   disposed = true
   if (objectUrl) URL.revokeObjectURL(objectUrl)
   document.documentElement.style.removeProperty('--r1-wallpaper')
-  delete document.documentElement.dataset.r1Wallpaper
 })
 </script>
 

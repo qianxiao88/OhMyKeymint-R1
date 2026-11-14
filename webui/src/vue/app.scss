@@ -457,8 +457,8 @@ button { touch-action: manipulation; }
    * the active MIUIX surface token so dark/AMOLED themes never turn white. */
   background: var(--omk-bar-background);
   background: color-mix(in srgb, var(--m-color-surface) 87%, transparent);
-  -webkit-backdrop-filter: blur(25px) saturate(1.2);
-  backdrop-filter: blur(25px) saturate(1.2);
+  -webkit-backdrop-filter: saturate(1.2);
+  backdrop-filter: saturate(1.2);
 }
 // The dock's safe-area padding lies outside the navigation surface. Paint it
 // independently in viewport coordinates so scrolling text cannot leak beneath
@@ -468,8 +468,8 @@ button { touch-action: manipulation; }
 }
 :root[data-backdrop-blur-supported='true'][data-bar-blur='true'][data-floating-bottom-bar='false'] body::after {
   background: color-mix(in srgb, var(--m-color-surface) 87%, transparent);
-  -webkit-backdrop-filter: blur(25px) saturate(1.2);
-  backdrop-filter: blur(25px) saturate(1.2);
+  -webkit-backdrop-filter: saturate(1.2);
+  backdrop-filter: saturate(1.2);
 }
 :root[data-floating-bottom-bar='true'] {
   --omk-nav-bottom: max(28px, calc(var(--omk-bottom-inset) + 8px));
@@ -509,8 +509,8 @@ button { touch-action: manipulation; }
   overflow: hidden;
   background: var(--omk-glass-background);
   background: color-mix(in srgb, var(--m-color-surface-container) 40%, transparent);
-  -webkit-backdrop-filter: blur(25px) saturate(1.35);
-  backdrop-filter: blur(25px) saturate(1.35);
+  -webkit-backdrop-filter: saturate(1.35);
+  backdrop-filter: saturate(1.35);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%), 0 3px 16px rgb(0 0 0 / 16%);
 }
 :root[data-floating-bottom-bar='true'][data-liquid-glass='true'] .main-navigation .m-navigation-bar__item--selected {
@@ -536,8 +536,8 @@ button { touch-action: manipulation; }
    * the bar as a fully transparent strip. */
   background: var(--omk-glass-background);
   background: color-mix(in srgb, var(--m-color-surface-container) 40%, transparent);
-  -webkit-backdrop-filter: blur(25px) saturate(1.35);
-  backdrop-filter: blur(25px) saturate(1.35);
+  -webkit-backdrop-filter: saturate(1.35);
+  backdrop-filter: saturate(1.35);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%), 0 3px 16px rgb(0 0 0 / 16%);
   transform: translate3d(var(--omk-liquid-nav-panel-offset), 0, 0) scale(var(--omk-ui-scale));
   transition: transform 380ms cubic-bezier(0.16, 1, 0.3, 1);
