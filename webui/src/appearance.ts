@@ -1,3 +1,4 @@
+import { setThemeMode } from 'miuix-vue'
 import { exec, isKsuWebui } from 'kernelsu-alt'
 import { DynamicScheme, Hct, Variant, argbFromHex, hexFromArgb } from '@material/material-color-utilities'
 
@@ -173,73 +174,9 @@ function monetTokens(seed: string, dark: boolean, style: PaletteStyle, spec: Col
     'slider-key-point': scheme.primary, 'slider-key-point-foreground': scheme.surfaceContainerHigh,
     'slider-background': mix(scheme.primary, 0.2, surface),
   }
-  return Object.fromEntries(Object.entries(roles).flatMap(([role, color]) => {
-    const value = typeof color === 'number' ? hexFromArgb(color) : color
-    // Keep the `--m-*` names the existing SCSS uses, and publish the same value
-    // as Varlet's `--hsl-*` / `--color-*` pair so every Varlet component picks up
-    // the same Monet scheme instead of its built-in MD3 defaults.
-    return [['--m-color-' + role, value], ...varletTokens(role, value)]
-  }))
-}
-
-/** Map one `--m-color-<role>` value onto Varlet's matching MD3 variables. */
-function varletTokens(role: string, value: string): [string, string][] {
-  const target = VARLET_ROLES[role]
-  if (!target) return []
-  const hsl = hslTriplet(value)
-  // Varlet consumes `--hsl-x: h, s%, l%` inside `hsla()`, so an unparsable value
-  // must not be published at all rather than produce an invalid colour.
-  return hsl ? [['--hsl-' + target, hsl], ['--color-' + target, `hsla(var(--hsl-${target}), 1)`]] : []
-}
-
-/** Varlet variable names for the roles this WebUI actually themes. */
-const VARLET_ROLES: Record<string, string> = {
-  primary: 'primary', 'on-primary': 'on-primary',
-  'primary-container': 'primary-container', 'on-primary-container': 'on-primary-container',
-  'secondary-container': 'secondary-container', 'on-secondary-container': 'on-secondary-container',
-  'tertiary-container': 'tertiary-container', 'on-tertiary-container': 'on-tertiary-container',
-  background: 'body', 'on-background': 'text',
-  surface: 'card', 'on-surface': 'on-card',
-  'surface-container': 'surface-container', 'surface-container-high': 'surface-container-high',
-  'surface-container-highest': 'surface-container-highest',
-  'on-surface-variant-summary': 'text-secondary',
-  outline: 'outline', 'divider-line': 'outline-variant',
-  error: 'danger', 'on-error': 'on-danger',
-  'error-container': 'danger-container', 'on-error-container': 'on-danger-container',
-}
-
-/** `#rrggbb` -> `h, s%, l%` (the triplet Varlet's `hsla(var(--hsl-x), a)` needs). */
-function hslTriplet(value: string): string | null {
-  const match = /^#([0-9a-f]{6})$/i.exec(value.trim())
-  if (!match) return null
-  const int = parseInt(match[1], 16)
-  const r = ((int >> 16) & 0xff) / 255
-  const g = ((int >> 8) & 0xff) / 255
-  const b = (int & 0xff) / 255
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const l = (max + min) / 2
-  const delta = max - min
-  let h = 0
-  let s = 0
-  if (delta !== 0) {
-    s = delta / (1 - Math.abs(2 * l - 1))
-    if (max === r) h = ((g - b) / delta) % 6
-    else if (max === g) h = (b - r) / delta + 2
-    else h = (r - g) / delta + 4
-    h *= 60
-    if (h < 0) h += 360
-  }
-  return `${Math.round(h)}, ${Math.round(s * 100)}%, ${Math.round(l * 100)}%`
-}
-
-/**
- * Varlet reads the colour scheme from a theme class / `StyleProvider`, not from
- * the old `m-theme-dark` class. `auto` follows the system listener above.
- */
-function setThemeMode(mode: 'system' | 'light' | 'dark'): void {
-  const root = document.documentElement
-  root.dataset.varletTheme = mode
+  return Object.fromEntries(Object.entries(roles).map(([role, color]) => [
+    '--m-color-' + role, typeof color === 'number' ? hexFromArgb(color) : color,
+  ]))
 }
 
 function isAppearanceMode(value: string | null): value is AppearanceMode {

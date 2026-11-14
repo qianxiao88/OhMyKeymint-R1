@@ -1,9 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import MiuixBottomSheet from './StableBottomSheet.vue'
-import { i18n } from '../i18n'
-import { isSecurityPatchDate } from '../security_patch'
-import { HAS_SOTER, IS_LITE } from '../r1'
 import {
   MiuixArrowPreference,
   MiuixButton,
@@ -13,13 +9,13 @@ import {
   MiuixProgressIndicator,
   MiuixSmallTitle,
   MiuixTopAppBar,
-} from '../ui/miuix-compat'
-import { AddCircle, BankCards, Close, Edit, Info, Lock, Photos, Replace, Reset, Update } from '../ui/icons'
+} from 'miuix-vue'
+import { AddCircle, BankCards, Close, Edit, Lock, Replace, Reset, Update } from 'miuix-vue/icons'
+import MiuixBottomSheet from './StableBottomSheet.vue'
+import { i18n } from '../i18n'
+import { isSecurityPatchDate } from '../security_patch'
 
 export type ToolEvent =
-  | 'cloudUpdate'
-  | 'feedback'
-  | 'wallpaper'
   | 'openAppTargets'
   | 'installKeybox'
   | 'syncSecurityPatch'
@@ -52,7 +48,6 @@ interface ToolRow {
 }
 
 const props = defineProps<{
-  cloudBusy: boolean
   securityPatchBusy: BusyPatch
   maintenanceBusy: 'gms' | 'rkp' | null
   rkpIssuanceBusy: boolean
@@ -60,9 +55,6 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  cloudUpdate: []
-  feedback: []
-  wallpaper: []
   openAppTargets: []
   installKeybox: []
   syncSecurityPatch: []
@@ -79,9 +71,6 @@ const emit = defineEmits<{
 
 function runTool(event: ToolEvent): void {
   switch (event) {
-    case 'cloudUpdate': emit('cloudUpdate'); break
-    case 'feedback': emit('feedback'); break
-    case 'wallpaper': emit('wallpaper'); break
     case 'openAppTargets': emit('openAppTargets'); break
     case 'installKeybox': emit('installKeybox'); break
     case 'syncSecurityPatch': emit('syncSecurityPatch'); break
@@ -105,7 +94,7 @@ const sheetOpen = computed({
   set: (open: boolean) => { if (!open) activeSheet.value = null },
 })
 // Keep the last sheet's content while the close animation plays.
-const shownSheet = ref<SheetId>(IS_LITE ? 'patch' : 'rkp')
+const shownSheet = ref<SheetId>('rkp')
 
 watch(activeSheet, (sheet, previous) => {
   if (sheet !== null) shownSheet.value = sheet
@@ -158,20 +147,7 @@ const sheets: Record<SheetId, { title: string, actions: ToolAction[] }> = {
   },
 }
 
-const cloudRow: ToolRow = { key: 'cloud', event: 'cloudUpdate', icon: Update, title: '从云端获取keybox', summary: '从浅笑云端更新keybox' }
-const feedbackRow: ToolRow = { key: 'feedback', event: 'feedback', icon: Info, title: '点击加入反馈群', summary: '点击加入反馈群，不懂的先看公告再进行有效反馈。如觉得此模块不错。可以打赏一下。感谢您的使用。' }
-const wallpaperRow: ToolRow = { key: 'wallpaper', event: 'wallpaper', icon: Photos, title: '背景壁纸', summary: '' }
-const liteRows = computed<ToolRow[]>(() => [
-  cloudRow,
-  { key: 'patch', sheet: 'patch', icon: Update, title: '安全补丁', summary: props.securityPatch ?? '同步或恢复安全补丁日期' },
-  { key: 'gms', event: 'clearGmsCache', icon: Reset, title: 'GMS 缓存清理', summary: '清理 Play 服务与 Play 商店缓存' },
-  { key: 'targets', event: 'openAppTargets', icon: AddCircle, title: '包名添加', summary: '选择使用核心 KeyMint 的应用' },
-  wallpaperRow,
-])
-
-const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => IS_LITE ? [
-  { title: tr('tools_title', 'Tools'), rows: liteRows.value },
-] : [
+const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => [
   {
     title: tr('tools_app_management', 'App management'),
     rows: [{
@@ -192,8 +168,6 @@ const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => IS_LITE ? [
         title: tr('menu_replace_keybox', 'Change Keybox'),
         summary: tr('tools_keybox_desc', 'Choose a Keybox.xml file and install it for Oh My Keymint.'),
       },
-      cloudRow,
-      feedbackRow,
       {
         key: 'rkp',
         sheet: 'rkp',
@@ -201,13 +175,13 @@ const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => IS_LITE ? [
         title: tr('tools_rkp', 'Remote key provisioning'),
         summary: tr('tools_rkp_desc', 'Fix RKP or issue a local RKP Keybox.'),
       },
-      ...(HAS_SOTER ? [{
+      {
         key: 'soter',
-        event: 'openSoterLocal' as const,
+        event: 'openSoterLocal',
         icon: BankCards,
         title: tr('soter_local_title', 'Local SOTER identities'),
         summary: tr('soter_local_tool_desc', 'Create random local identities and set app CPU-ID overrides.'),
-      }] : []),
+      },
     ],
   },
   {
@@ -237,11 +211,9 @@ const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => IS_LITE ? [
       },
     ],
   },
-  { title: '背景壁纸', rows: [wallpaperRow] },
 ])
 
 function isBusy(event: ToolEvent): boolean {
-  if (event === 'cloudUpdate' || event === 'installKeybox') return props.cloudBusy
   if (event === 'clearGmsCache' || event === 'repairRkp') return props.maintenanceBusy !== null
   if (event === 'issueRkp') return props.rkpIssuanceBusy
   if (event === 'syncSecurityPatch' || event === 'restoreSecurityPatch') {
@@ -251,8 +223,7 @@ function isBusy(event: ToolEvent): boolean {
 }
 
 function isActiveBusy(event: ToolEvent): boolean {
-  return (event === 'cloudUpdate' && props.cloudBusy)
-    || (event === 'syncSecurityPatch' && props.securityPatchBusy === 'sync')
+  return (event === 'syncSecurityPatch' && props.securityPatchBusy === 'sync')
     || (event === 'restoreSecurityPatch' && props.securityPatchBusy === 'restore')
     || (event === 'clearGmsCache' && props.maintenanceBusy === 'gms')
     || (event === 'repairRkp' && props.maintenanceBusy === 'rkp')
@@ -302,9 +273,8 @@ function onSheetAction(action: ToolAction): void {
 
 <template>
   <section class="app-page tools-page" aria-labelledby="tools-title">
-    <MiuixTopAppBar v-if="!IS_LITE" :title="tr('tools_title', 'Tools')" />
-    <h1 v-if="!IS_LITE" id="tools-title" class="page-large-title">{{ tr('tools_title', 'Tools') }}</h1>
-    <h2 v-else id="tools-title" class="sr-only">{{ tr('tools_title', 'Tools') }}</h2>
+    <MiuixTopAppBar :title="tr('tools_title', 'Tools')" />
+    <h1 id="tools-title" class="page-large-title">{{ tr('tools_title', 'Tools') }}</h1>
 
     <section v-for="group in groups" :key="group.title" class="preference-section">
       <MiuixSmallTitle :text="group.title" />

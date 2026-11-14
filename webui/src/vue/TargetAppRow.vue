@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { HAS_SOTER } from '../r1'
-import {
-  MiuixCheckboxPreference,
-  MiuixIcon,
-} from '../ui/miuix-compat'
-import { All, ChevronForward } from '../ui/icons'
+import { MiuixCheckboxPreference, MiuixIcon } from 'miuix-vue'
+import { All, ChevronForward } from 'miuix-vue/icons'
 
 const props = defineProps<{
   packageName: string
@@ -51,7 +47,7 @@ watch(() => props.packageName, () => { iconLoaded.value = false })
         </span>
       </template>
     </MiuixCheckboxPreference>
-    <button v-if="HAS_SOTER" type="button" class="target-app-settings" :disabled="disabled"
+    <button type="button" class="target-app-settings" :disabled="disabled"
       :aria-label="'SOTER: ' + appName" @click="emit('settings')">
       <MiuixIcon :icon="ChevronForward" :size="20" />
     </button>

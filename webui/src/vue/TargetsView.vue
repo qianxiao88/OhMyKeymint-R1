@@ -1,18 +1,6 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance, ComputedRef } from 'vue'
-import MiuixBottomSheet from './StableBottomSheet.vue'
-import {
-  afterPaint,
-  type AppList,
-  type SelectableAppEntry,
-} from '../app_list/app_list'
-import { type Cli } from '../cli'
-import { i18n } from '../i18n'
-import { isDev } from '../utils/dev'
-import TargetAppRow from './TargetAppRow.vue'
-import type SoterDialogType from './SoterIdentityDialog.vue'
-import { HAS_SOTER } from '../r1'
 import {
   MiuixButton,
   MiuixCard,
@@ -23,10 +11,28 @@ import {
   MiuixSwitchPreference,
   MiuixTopAppBar,
   showSnackbar,
-} from '../ui/miuix-compat'
-import { AddCircle, All, Back, Clear, Close, More, Refresh, SelectAll } from '../ui/icons'
-
-const SoterIdentityDialog = HAS_SOTER ? defineAsyncComponent(() => import('./SoterIdentityDialog.vue')) : undefined
+} from 'miuix-vue'
+import MiuixBottomSheet from './StableBottomSheet.vue'
+import {
+  AddCircle,
+  All,
+  Back,
+  Clear,
+  Close,
+  More,
+  Refresh,
+  SelectAll,
+} from 'miuix-vue/icons'
+import {
+  afterPaint,
+  type AppList,
+  type SelectableAppEntry,
+} from '../app_list/app_list'
+import { type Cli } from '../cli'
+import { i18n } from '../i18n'
+import { isDev } from '../utils/dev'
+import TargetAppRow from './TargetAppRow.vue'
+import SoterIdentityDialog from './SoterIdentityDialog.vue'
 
 interface Props {
   appList: AppList
@@ -99,9 +105,8 @@ const identityOpen = ref(false)
 const identityTarget = ref('')
 const identityLabel = ref('')
 const identityBatchTargets = ref<string[] | undefined>()
-const identityDialog = ref<InstanceType<typeof SoterDialogType> | null>(null)
+const identityDialog = ref<InstanceType<typeof SoterIdentityDialog> | null>(null)
 function openIdentity(entry: SelectableAppEntry): void {
-  if (!HAS_SOTER) return
   if (props.loading || props.saving || props.saveError) return
   systemSheetOpen.value = false
   menuOpen.value = false
@@ -112,7 +117,6 @@ function openIdentity(entry: SelectableAppEntry): void {
 }
 
 function openBulkIdentity(): void {
-  if (!HAS_SOTER) return
   if (props.loading || props.saving || props.saveError || selectingRecommended.value) return
   identityTarget.value = ''
   identityBatchTargets.value = props.appList.getSelectedIdentityTargets()
@@ -490,7 +494,7 @@ defineExpose({
                   <MiuixIcon :icon="AddCircle" :size="21" />
                   <span>{{ translate('menu_add_system_app', 'Add System App') }}</span>
                 </MiuixButton>
-                <MiuixButton v-if="HAS_SOTER" role="menuitem" :disabled="loading || saving || saveError || selectingRecommended" @click="openBulkIdentity">
+                <MiuixButton role="menuitem" :disabled="loading || saving || saveError || selectingRecommended" @click="openBulkIdentity">
                   <MiuixIcon :icon="AddCircle" :size="21" />
                   <span>{{ translate('soter_bulk_title', 'Assign local identity to selected apps') }}</span>
                 </MiuixButton>
@@ -672,7 +676,7 @@ defineExpose({
       </div>
     </MiuixBottomSheet>
 
-    <SoterIdentityDialog v-if="HAS_SOTER" ref="identityDialog" v-model="identityOpen" :cli="cli" :target="identityTarget"
+    <SoterIdentityDialog ref="identityDialog" v-model="identityOpen" :cli="cli" :target="identityTarget"
       :target-label="identityLabel" :batch-targets="identityBatchTargets" />
   </section>
 </template>

@@ -1,6 +1,24 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import {
+  MiuixArrowPreference,
+  MiuixCard,
+  MiuixDivider,
+  MiuixDropdownPreference,
+  MiuixIcon,
+  MiuixIconButton,
+  MiuixProgressIndicator,
+  MiuixRadioButtonPreference,
+  MiuixSlider,
+  MiuixSmallTitle,
+  MiuixSpinnerPreference,
+  MiuixSwitchPreference,
+  MiuixTopAppBar,
+  showSnackbar,
+  type MiuixDropdownItem,
+} from 'miuix-vue'
 import MiuixBottomSheet from './StableBottomSheet.vue'
+import { Background, Close, Download, Layers, Photos, Sidebar, Tasks, Theme, Translate, Tune } from 'miuix-vue/icons'
 import {
   ACCENT_COLORS,
   ACCENT_SEEDS,
@@ -17,25 +35,6 @@ import {
 import { i18n } from '../i18n'
 import type { Cli } from '../cli'
 import { afterPaint } from '../app_list/app_list'
-import { R1_AUTHOR, R1_MODULE_NAME } from '../r1'
-import {
-  type MiuixDropdownItem,
-  MiuixArrowPreference,
-  MiuixCard,
-  MiuixDivider,
-  MiuixDropdownPreference,
-  MiuixIcon,
-  MiuixIconButton,
-  MiuixProgressIndicator,
-  MiuixRadioButtonPreference,
-  MiuixSlider,
-  MiuixSmallTitle,
-  MiuixSpinnerPreference,
-  MiuixSwitchPreference,
-  showSnackbar,
-  MiuixTopAppBar,
-} from '../ui/miuix-compat'
-import { Background, Close, Download, Layers, Photos, Sidebar, Tasks, Theme, Translate, Tune } from '../ui/icons'
 
 interface Choice<T extends string> {
   value: T
@@ -479,10 +478,6 @@ onBeforeUnmount(() => {
             </template>
           </MiuixArrowPreference>
         </MiuixCard>
-      </section>
-      <section class="settings-section" aria-labelledby="r1-about-title">
-        <MiuixSmallTitle id="r1-about-title" text="关于" />
-        <p class="r1-about">{{ R1_MODULE_NAME }}<br>作者：{{ R1_AUTHOR }}</p>
       </section>
     </div>
 

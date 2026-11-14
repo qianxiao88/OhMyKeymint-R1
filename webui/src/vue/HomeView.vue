@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { IS_LITE, R1_MODULE_NAME } from '../r1'
 import {
   MiuixBasicComponent,
   MiuixCard,
@@ -8,8 +7,8 @@ import {
   MiuixIconButton,
   MiuixProgressIndicator,
   MiuixTopAppBar,
-} from '../ui/miuix-compat'
-import { Refresh } from '../ui/icons'
+} from 'miuix-vue'
+import { Refresh } from 'miuix-vue/icons'
 import type {
   DiagnosticsState,
   KeyboxLevel,
@@ -194,8 +193,8 @@ const identityRows = computed(() => [
 
 <template>
   <section class="app-page home-page" aria-labelledby="home-title">
-    <MiuixTopAppBar :title="R1_MODULE_NAME">
-      <template v-if="!IS_LITE" #actions>
+    <MiuixTopAppBar title="Oh My Keymint">
+      <template #actions>
         <MiuixIconButton
           :disabled="diagnosticsStatus === 'loading'"
           :aria-label="tr('tools_diagnostics_refresh', 'Refresh')"
@@ -211,7 +210,7 @@ const identityRows = computed(() => [
         </MiuixIconButton>
       </template>
     </MiuixTopAppBar>
-    <h1 id="home-title" class="page-large-title r1-module-name">{{ R1_MODULE_NAME }}</h1>
+    <h1 id="home-title" class="page-large-title">Oh My Keymint</h1>
 
     <MiuixCard class="status-hero" :data-tone="heroState.tone" press-feedback="none">
       <div class="status-hero__text" role="status" aria-live="polite">
@@ -250,7 +249,7 @@ const identityRows = computed(() => [
       </svg>
     </MiuixCard>
 
-    <MiuixCard v-if="!IS_LITE" class="info-card" press-feedback="none">
+    <MiuixCard class="info-card" press-feedback="none">
       <MiuixBasicComponent
         v-for="row in identityRows"
         :key="row.id"

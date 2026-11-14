@@ -1,9 +1,5 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import MiuixBottomSheet from './StableBottomSheet.vue'
-import type { FileSelector } from '../file_selector/file_selector'
-import { i18n } from '../i18n'
-import { afterPaint } from '../app_list/app_list'
 import {
   MiuixBasicComponent,
   MiuixButton,
@@ -11,8 +7,12 @@ import {
   MiuixIcon,
   MiuixIconButton,
   MiuixProgressIndicator,
-} from '../ui/miuix-compat'
-import { Back, File, Folder, Import } from '../ui/icons'
+} from 'miuix-vue'
+import MiuixBottomSheet from './StableBottomSheet.vue'
+import { Back, File, Folder, Import } from 'miuix-vue/icons'
+import type { FileSelector } from '../file_selector/file_selector'
+import { i18n } from '../i18n'
+import { afterPaint } from '../app_list/app_list'
 
 const props = defineProps<{ selector: FileSelector }>()
 const revision = ref(0)
