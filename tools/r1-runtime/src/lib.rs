@@ -502,7 +502,7 @@ fn cloud_interval_minutes(paths: &Paths) -> u64 {
 /// Only the one documented key is written, so a future field would be lost --
 /// acceptable while this is the only setting stored here.
 fn set_cloud_interval_minutes(paths: &Paths, minutes: u64) -> Result<()> {
-    if minutes < 1 || minutes > MAX_CLOUD_INTERVAL_MINUTES {
+    if !(1..=MAX_CLOUD_INTERVAL_MINUTES).contains(&minutes) {
         return Err(format!(
             "cloud interval must be between 1 and {MAX_CLOUD_INTERVAL_MINUTES} minutes"
         ));
