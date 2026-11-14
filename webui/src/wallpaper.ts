@@ -122,3 +122,61 @@ export function wallpaperStorage(record?: WallpaperRecord): Promise<WallpaperRec
     }
   })
 }
+
+/**
+ * Paint the saved wallpaper onto the document before the app mounts.
+ *
+ * The CSS declares the bundled image as the `--r1-wallpaper` fallback, so a
+ * custom wallpaper applied after the first paint would show the default for one
+ * frame. Resolving it during bootstrap instead means the first frame is already
+ * correct. Failures are swallowed on purpose: a missing custom wallpaper must
+ * leave the bundled default in place rather than block startup.
+ */
+/**
+ * The object URL currently painted onto the document, if any.
+ *
+ * Shared so that bootstrap's pre-paint restore and the wallpaper dialog cannot
+ * each hold their own copy alive; whoever paints next releases the previous one.
+ */
+let activeUrl: string | null = null
+
+/**
+ * Paint `record` and release whatever was painted before.
+ *
+ * An empty or disabled record clears the override, which falls back to the
+ * bundled default declared by the stylesheet.
+ */
+export function paintWallpaper(record: WallpaperRecord): void {
+  const previous = activeUrl
+  activeUrl = record.enabled && record.blob ? URL.createObjectURL(record.blob) : null
+  if (activeUrl) document.documentElement.style.setProperty('--r1-wallpaper', `url("${activeUrl}")`)
+  else document.documentElement.style.removeProperty('--r1-wallpaper')
+  if (previous && previous !== activeUrl) URL.revokeObjectURL(previous)
+}
+
+/** Release the painted URL and drop the override. */
+export function releaseWallpaper(): void {
+  if (activeUrl) URL.revokeObjectURL(activeUrl)
+  activeUrl = null
+  document.documentElement.style.removeProperty('--r1-wallpaper')
+}
+
+/**
+ * Paint the saved wallpaper before the app mounts.
+ *
+ * The stylesheet declares the bundled image as the `--r1-wallpaper` fallback, so
+ * a custom wallpaper applied after the first paint would show the default for a
+ * frame. Resolving it during bootstrap means the first frame is already correct.
+ * Failures are swallowed on purpose: a missing custom wallpaper must leave the
+ * bundled default in place rather than block startup.
+ */
+export async function restoreWallpaper(): Promise<void> {
+  try {
+    const record = await wallpaperStorage()
+    if (!record.enabled || !record.blob) return
+    await validateWallpaper(record.blob)
+    paintWallpaper(record)
+  } catch {
+    // Keep the bundled default; the wallpaper dialog reports details on demand.
+  }
+}

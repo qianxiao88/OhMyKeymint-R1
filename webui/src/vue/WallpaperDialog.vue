@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { validateWallpaper, wallpaperStorage, type WallpaperRecord } from '../wallpaper'
+import {
+  paintWallpaper,
+  releaseWallpaper,
+  validateWallpaper,
+  wallpaperStorage,
+  type WallpaperRecord,
+} from '../wallpaper'
 import {
   MiuixArrowPreference,
   MiuixButton,
@@ -17,17 +23,14 @@ const busy = ref(true)
 const enabled = ref(false)
 const hasImage = ref(false)
 let saved: WallpaperRecord = { enabled: false, blob: null }
-let objectUrl: string | null = null
 let disposed = false
 
 function apply(record: WallpaperRecord): void {
   if (disposed) return
-  const previous = objectUrl
-  objectUrl = record.enabled && record.blob ? URL.createObjectURL(record.blob) : null
-  // An empty custom record falls back to the bundled default wallpaper.
-  if (objectUrl) document.documentElement.style.setProperty('--r1-wallpaper', `url("${objectUrl}")`)
-  else document.documentElement.style.removeProperty('--r1-wallpaper')
-  if (previous) URL.revokeObjectURL(previous)
+  // The shared helper owns the object URL, so bootstrap's pre-paint restore and
+  // this dialog cannot each hold a copy alive. An empty record clears the
+  // override and falls back to the bundled default.
+  paintWallpaper(record)
   saved = record
   enabled.value = record.enabled
   hasImage.value = !!record.blob
@@ -79,8 +82,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   disposed = true
-  if (objectUrl) URL.revokeObjectURL(objectUrl)
-  document.documentElement.style.removeProperty('--r1-wallpaper')
+  releaseWallpaper()
 })
 </script>
 

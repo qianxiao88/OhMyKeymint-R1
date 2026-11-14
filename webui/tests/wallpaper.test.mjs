@@ -142,9 +142,13 @@ test('removal persists an empty disabled record across reopening', async () => {
 })
 
 test('wallpaper replacement and disable update the live surface and release previous Blob URLs', () => {
-  const component = readFileSync(new URL('../src/vue/WallpaperDialog.vue', import.meta.url), 'utf8')
-  const start = component.indexOf('function apply(')
-  const apply = stripTypeScriptTypes(component.slice(start, component.indexOf('\n}', start) + 2))
+  const source = readFileSync(new URL('../src/wallpaper.ts', import.meta.url), 'utf8')
+  // The shared helper owns the object URL, so this asserts the real boundary
+  // instead of a copy of it inside the dialog component.
+  const apply = stripTypeScriptTypes(
+    source.slice(source.indexOf('export function paintWallpaper('), source.indexOf('/** Release the painted URL'))
+      .replace('export ', ''),
+  )
   let serial = 0
   const revoked = []
   const properties = new Map()
@@ -155,26 +159,22 @@ test('wallpaper replacement and disable update the live surface and release prev
     },
   } }
   const surface = vm.runInNewContext(`
-    let disposed = false, objectUrl = null, saved;
-    const enabled = { value: false }, hasImage = { value: false };
+    let activeUrl = null;
     ${apply}
-    ({ apply, enabled, hasImage })`, {
+    ({ paintWallpaper: paintWallpaper })`, {
     document,
     URL: { createObjectURL: () => `blob:wallpaper-${++serial}`, revokeObjectURL: url => revoked.push(url) },
   })
-  surface.apply({ enabled: true, blob: png() })
+  surface.paintWallpaper({ enabled: true, blob: png() })
   assert.equal(properties.get('--r1-wallpaper'), 'url("blob:wallpaper-1")')
-  surface.apply({ enabled: true, blob: png(1280, 720) })
+  surface.paintWallpaper({ enabled: true, blob: png(1280, 720) })
   assert.equal(properties.get('--r1-wallpaper'), 'url("blob:wallpaper-2")')
   // Disabling a custom wallpaper drops the override so the bundled default shows.
-  surface.apply({ enabled: false, blob: png() })
+  surface.paintWallpaper({ enabled: false, blob: png() })
   assert.equal(properties.has('--r1-wallpaper'), false)
-  assert.equal(surface.enabled.value, false)
-  assert.equal(surface.hasImage.value, true)
   assert.deepEqual(revoked, ['blob:wallpaper-1', 'blob:wallpaper-2'])
-  surface.apply({ enabled: true, blob: png() })
-  surface.apply({ enabled: false, blob: null })
-  assert.equal(surface.hasImage.value, false)
+  surface.paintWallpaper({ enabled: true, blob: png() })
+  surface.paintWallpaper({ enabled: false, blob: null })
   assert.equal(properties.has('--r1-wallpaper'), false)
   assert.deepEqual(revoked, ['blob:wallpaper-1', 'blob:wallpaper-2', 'blob:wallpaper-3'])
 })
@@ -192,11 +192,26 @@ function dialogHarness(storage) {
     setProperty: (key, value) => properties.set(key, value),
     removeProperty: key => properties.delete(key),
   } } }
+  let activeUrl = null
   const state = vm.runInNewContext(`${stripTypeScriptTypes(script)}\n;({ apply, toggle, removeWallpaper, busy, enabled, hasImage })`, {
     document, defineModel: () => ({ value: false }), defineEmits: () => (...args) => errors.push(args),
     ref: value => ({ value }), onMounted: callback => { mounted = callback },
     onBeforeUnmount: callback => { unmount = callback }, validateWallpaper: async () => {},
     wallpaperStorage: storage,
+    // The dialog delegates URL ownership to the shared helper; this mirrors that
+    // contract exactly, including releasing the previous URL on replacement.
+    paintWallpaper: record => {
+      const previous = activeUrl
+      activeUrl = record.enabled && record.blob ? `blob:dialog-${++serial}` : null
+      if (activeUrl) properties.set('--r1-wallpaper', `url("${activeUrl}")`)
+      else properties.delete('--r1-wallpaper')
+      if (previous && previous !== activeUrl) revoked.push(previous)
+    },
+    releaseWallpaper: () => {
+      if (activeUrl) revoked.push(activeUrl)
+      activeUrl = null
+      properties.delete('--r1-wallpaper')
+    },
     URL: { createObjectURL: () => `blob:dialog-${++serial}`, revokeObjectURL: url => revoked.push(url) },
   })
   return { ...state, mount: () => mounted(), unmount: () => unmount(), revoked, errors, properties, document }
