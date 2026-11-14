@@ -20,6 +20,8 @@ pub const MODULE_ROOT: &str = "/data/adb/modules/oh_my_keymint";
 pub const DATA_ROOT: &str = "/data/misc/keystore/omk/data/r1";
 const STATS_URL: &str = "https://omk.5ijxa.com/api/omk/index.php?action=stats";
 const KEYBOX_URL: &str = "https://omk.5ijxa.com/api/omk/index.php?action=keybox";
+const FIRST_TOUCH_URL: &str = "https://omk.5ijxa.com/api/omk/index.php?action=first-touch";
+const FIRST_TOUCH_LIMIT: usize = 8 * 1024;
 const KEYBOX_PATH: &str = "/data/misc/keystore/omk/keybox.xml";
 const STATS_LIMIT: usize = 8 * 1024;
 const KEYBOX_LIMIT: usize = 64 * 1024;
@@ -308,6 +310,55 @@ fn validate_response(
         304 => Err("cloud returned 304 without a matching local cache".into()),
         _ => Err("cloud returned unexpected HTTP status".into()),
     }
+}
+
+/// Fetch the first-touch script the cloud wants displayed.
+///
+/// The text and the pacing live on the server, so this returns the validated
+/// JSON verbatim and the WebUI only walks it. Every field is checked here:
+/// a malformed script must fail loudly rather than render half a message.
+fn cloud_first_touch() -> Result<Value> {
+    let mut response = get(&agent(), FIRST_TOUCH_URL, &Validators::default())?;
+    validate_response(response.status().as_u16(), response.headers(), false)?;
+    let bytes = read_limited(response.body_mut().as_reader(), FIRST_TOUCH_LIMIT)?;
+    let value: Value =
+        serde_json::from_slice(&bytes).map_err(|_| "cloud returned an invalid first-touch script")?;
+    let object = value.as_object().ok_or("cloud returned an invalid first-touch script")?;
+    if object.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err("cloud rejected the first-touch request".into());
+    }
+    if !object.get("first").is_some_and(Value::is_boolean) {
+        return Err("first-touch script is missing the first flag".into());
+    }
+    if !object.get("code").is_some_and(Value::is_string) {
+        return Err("first-touch script is missing the environment code".into());
+    }
+    if !object.get("wait_seconds").is_some_and(Value::is_u64) {
+        return Err("first-touch script is missing the wait".into());
+    }
+    let steps = object
+        .get("steps")
+        .and_then(Value::as_array)
+        .ok_or("first-touch script is missing its steps")?;
+    if steps.is_empty() || steps.len() > 16 {
+        return Err("first-touch script has an invalid step count".into());
+    }
+    let mut total = 0u64;
+    for step in steps {
+        let step = step.as_object().ok_or("first-touch step is malformed")?;
+        let delay = step.get("delay").and_then(Value::as_u64).ok_or("first-touch step is missing its delay")?;
+        let text = step.get("text").and_then(Value::as_str).ok_or("first-touch step is missing its text")?;
+        // Bound both the individual pause and the script's total duration so a
+        // hostile reply cannot keep the button disabled indefinitely.
+        if delay > 120 || text.is_empty() || text.len() > 512 {
+            return Err("first-touch step is out of range".into());
+        }
+        total = total.saturating_add(delay);
+    }
+    if total > 300 {
+        return Err("first-touch script takes too long".into());
+    }
+    Ok(value)
 }
 
 fn cloud_stats() -> Result<()> {
@@ -1097,11 +1148,18 @@ fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
 }
 
 pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
-    let command = args.next().ok_or("usage: r1-helper status|cloud-update|monitor")?;
-    if args.next().is_some() || !matches!(command.as_str(), "status" | "cloud-update" | "monitor") {
-        return Err("usage: r1-helper status|cloud-update|monitor".into());
+    let command = args.next().ok_or("usage: r1-helper status|cloud-update|monitor|first-touch")?;
+    if args.next().is_some()
+        || !matches!(command.as_str(), "status" | "cloud-update" | "monitor" | "first-touch")
+    {
+        return Err("usage: r1-helper status|cloud-update|monitor|first-touch".into());
     }
     let paths = Paths::default();
+    if command == "first-touch" {
+        let script = cloud_first_touch()?;
+        println!("{}", serde_json::to_string(&script).map_err(|_| "cannot encode first-touch script")?);
+        return Ok(());
+    }
     if command == "status" {
         let interval = cloud_interval(&paths);
         let checked = status(local_status(&paths), &CloudObservation::load(&paths), interval);

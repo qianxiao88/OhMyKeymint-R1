@@ -486,12 +486,54 @@ function parseSupportedAbi(output: string): SupportedAbi | null {
   return null
 }
 
+export interface FirstTouchStep {
+  /** Seconds to wait before this step is shown. */
+  delay: number
+  text: string
+}
+
+export interface FirstTouchScript {
+  /** False once this client has already seen the script; the caller then skips it. */
+  first: boolean
+  /** Environment code the cloud bound to this client's address. */
+  code: string
+  /** Randomised wait the server picked for this run. */
+  waitSeconds: number
+  steps: FirstTouchStep[]
+}
+
 export class Cli {
   async cloudUpdate(): Promise<boolean> {
     const output = await this.#runR1('cloud-update')
     if (output.ok !== true) throw new Error('Cloud keybox update did not complete')
     if (typeof output.unchanged !== 'boolean') throw new Error('Invalid R1 cloud update response')
     return output.unchanged
+  }
+
+  /**
+   * Fetch the first-touch script the cloud wants shown before a keybox update.
+   *
+   * The text and pacing live on the server, so this only validates the shape and
+   * hands it back verbatim; the caller walks the steps.
+   */
+  async getFirstTouchScript(): Promise<FirstTouchScript> {
+    // The first-touch script is served by the helper, not by keymint, so this
+    // goes through the same r1-helper runner as cloud update and status.
+    const parsed = await this.#runR1('first-touch')
+    if (parsed.ok !== true) throw new Error('Cloud rejected the first-touch request')
+    if (typeof parsed.first !== 'boolean' || typeof parsed.code !== 'string'
+        || typeof parsed.wait_seconds !== 'number' || !Array.isArray(parsed.steps)) {
+      throw new Error('Invalid first-touch response')
+    }
+    const steps: FirstTouchStep[] = []
+    for (const raw of parsed.steps) {
+      if (!isRecord(raw) || typeof raw.delay !== 'number' || typeof raw.text !== 'string') {
+        throw new Error('Invalid first-touch step')
+      }
+      steps.push({ delay: raw.delay, text: raw.text })
+    }
+    if (steps.length === 0 || steps.length > 16) throw new Error('Invalid first-touch step count')
+    return { first: parsed.first, code: parsed.code, waitSeconds: parsed.wait_seconds, steps }
   }
 
   async getR1Status(): Promise<{ ok: boolean, reason: string, cloud_connected: boolean }> {
@@ -502,7 +544,7 @@ export class Cli {
   }
 
   async #runR1(
-    action: 'cloud-update' | 'status',
+    action: 'cloud-update' | 'status' | 'first-touch',
     argument?: string,
   ): Promise<Record<string, unknown>> {
     const argumentSuffix = argument === undefined ? '' : ` ${shellQuote(argument)}`
@@ -510,7 +552,7 @@ export class Cli {
     if (result.errno !== 0) {
       throw new Error(result.stderr.trim() || `R1 helper exited with code ${result.errno}`)
     }
-    if (result.stdout.length > 8192) throw new Error('R1 response is too large')
+    if (result.stdout.length > 16384) throw new Error('R1 response is too large')
     let output: unknown
     try { output = JSON.parse(result.stdout) }
     catch { throw new Error('Invalid R1 helper response') }

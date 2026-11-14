@@ -16,6 +16,7 @@ import { afterPaint, AppList, type AppListSnapshot } from '../app_list/app_list'
 import {
   Cli,
   type DiagnosticsState,
+  type FirstTouchScript,
   type KeyboxRevocationStatus,
   type RkpIssuedArtifact,
   type RkpProtocol,
@@ -92,6 +93,11 @@ const keyboxOpen = ref(false)
 const selectedKeybox = ref<{ name: string, contents: Uint8Array } | null>(null)
 const keyboxBusy = ref(false)
 const cloudBusy = ref(false)
+// The cloud decides whether this client still has to watch the first-touch
+// script; `firstTouchRunning` keeps the button disabled while it plays.
+const firstTouchRunning = ref(false)
+let autoRefreshTimer: number | null = null
+const AUTO_REFRESH_MINUTES = 10
 const wallpaperOpen = ref(false)
 const targetsView = ref<InstanceType<typeof TargetsView> | null>(null)
 const settingsView = ref<InstanceType<typeof SettingsView> | null>(null)
@@ -675,18 +681,74 @@ function formatRkpCreatedAt(timestamp: number): string {
   return new Date(timestamp * 1000).toLocaleString(i18n.lang)
 }
 
+const sleep = (ms: number) => new Promise<void>(resolve => { window.setTimeout(resolve, ms) })
+
+/**
+ * Play the first-touch script the cloud returned.
+ *
+ * Every word and every pause comes from the server: this only walks the steps,
+ * so the copy can change without a new package. The caller keeps the button
+ * disabled for the whole sequence, which is why a malformed script is rejected
+ * in cli.ts before it can reach here.
+ */
+async function playFirstTouch(script: FirstTouchScript): Promise<void> {
+  firstTouchRunning.value = true
+  try {
+    for (const step of script.steps) {
+      if (step.delay > 0) await sleep(step.delay * 1000)
+      notify(step.text, true)
+    }
+  } finally {
+    firstTouchRunning.value = false
+  }
+}
+
 async function updateCloudKeybox(): Promise<void> {
-  if (cloudBusy.value || keyboxBusy.value) return
+  if (cloudBusy.value || keyboxBusy.value || firstTouchRunning.value) return
   cloudBusy.value = true
   try {
     if (isDev()) { notify(i18n.t('maintenance_preview_only')); return }
     await afterPaint()
+
+    // Ask the cloud first: it knows whether this client already saw the script.
+    // A failure here must not block the update, so fall through to the update.
+    let script: FirstTouchScript | null = null
+    try { script = await cli.getFirstTouchScript() } catch { script = null }
+    if (script?.first) {
+      await playFirstTouch(script)
+      return
+    }
+
     const unchanged = await cli.cloudUpdate()
     notify(unchanged ? '你的keybox是最新的啦' : '获取成功，正在载入')
     await Promise.all([refreshIdentity(true), refreshDiagnostics()])
   } catch {
     notify('请检查你的网络哟', true)
   } finally { cloudBusy.value = false }
+}
+
+/**
+ * Poll the cloud on the configured period.
+ *
+ * This mirrors what the helper already does on its own timer, but running it
+ * from the open WebUI means a replacement keybox shows up while the sheet is
+ * still on screen instead of after the next helper cycle. The helper remains
+ * the source of truth; this never installs anything the helper would reject.
+ */
+function startAutoRefresh(): void {
+  if (autoRefreshTimer !== null) return
+  autoRefreshTimer = window.setInterval(() => {
+    if (cloudBusy.value || keyboxBusy.value || firstTouchRunning.value) return
+    if (document.visibilityState !== 'visible') return
+    void updateCloudKeybox()
+  }, AUTO_REFRESH_MINUTES * 60 * 1000)
+}
+
+function stopAutoRefresh(): void {
+  if (autoRefreshTimer !== null) {
+    window.clearInterval(autoRefreshTimer)
+    autoRefreshTimer = null
+  }
 }
 
 async function openFeedback(): Promise<void> {
@@ -747,9 +809,13 @@ onMounted(async () => {
   // Package enumeration is only needed when the picker opens. In particular,
   // do not call the synchronous Android package bridge during home startup.
   await Promise.all([refreshIdentity(), refreshDiagnostics()])
+  // Keep the installed keybox current while the sheet is open; the helper runs
+  // its own cycle as well, so this only shortens the window.
+  startAutoRefresh()
 })
 
 onBeforeUnmount(() => {
+  stopAutoRefresh()
   pageScroller.removeEventListener('scroll', onPageScroll)
   if (titleCollapseFrame !== 0) cancelAnimationFrame(titleCollapseFrame)
   if (navigationFrame !== null) window.cancelAnimationFrame(navigationFrame)
@@ -908,7 +974,7 @@ watch(rkpImportConfirmOpen, open => {
             :security-patch="securityPatch"
             :security-patch-busy="securityPatchBusy"
             :maintenance-busy="maintenanceBusy"
-            :cloud-busy="cloudBusy"
+            :cloud-busy="cloudBusy || firstTouchRunning"
             @open-app-targets="onTool('openAppTargets')"
             @cloud-update="onTool('cloudUpdate')"
             @clear-gms-cache="onTool('clearGmsCache')"
@@ -939,7 +1005,7 @@ watch(rkpImportConfirmOpen, open => {
           @clear-gms-cache="onTool('clearGmsCache')"
           @repair-rkp="onTool('repairRkp')"
           @issue-rkp="onTool('issueRkp')"
-          :cloud-busy="cloudBusy"
+          :cloud-busy="cloudBusy || firstTouchRunning"
           @open-soter-local="onTool('openSoterLocal')"
           @cloud-update="onTool('cloudUpdate')"
           @feedback="onTool('feedback')"
