@@ -49,6 +49,45 @@ const patchSheetOpen = ref(false)
 const customPatchOpen = ref(false)
 const customPatchDate = ref('')
 const logExportBusy = ref(false)
+// The lite build has no Settings page, so the polling period is edited here.
+const cloudInterval = ref<number | null>(null)
+const cloudIntervalBusy = ref(false)
+
+async function loadCloudInterval(): Promise<void> {
+  try { cloudInterval.value = await props.cli.getCloudInterval() } catch { cloudInterval.value = null }
+}
+
+async function promptCloudInterval(): Promise<void> {
+  if (cloudIntervalBusy.value) return
+  const current = cloudInterval.value === null ? '' : String(cloudInterval.value)
+  const answer = window.prompt(
+    tr('settings_cloud_interval_prompt', 'Minutes between cloud updates (1-1440)'),
+    current,
+  )
+  if (answer === null) return
+  const minutes = Number(answer.trim())
+  cloudIntervalBusy.value = true
+  try {
+    // The helper validates the range as well; this only avoids a pointless call
+    // when the entry is obviously not a whole number.
+    if (!Number.isInteger(minutes)) throw new Error(tr('settings_cloud_interval_invalid', 'Enter 1 to 1440 minutes'))
+    cloudInterval.value = await props.cli.setCloudInterval(minutes)
+    void showSnackbar({
+      message: tr('settings_cloud_interval_saved', 'Cloud update every %s minutes').replace('%s', String(cloudInterval.value)),
+      duration: 'long',
+      withDismissAction: true,
+    })
+  } catch (error) {
+    void showSnackbar({
+      message: error instanceof Error ? error.message : String(error),
+      duration: 6000,
+      withDismissAction: true,
+    })
+  } finally { cloudIntervalBusy.value = false }
+}
+
+// Read once: the helper owns the stored value.
+void loadCloudInterval()
 
 const customPatchValid = computed(() => isSecurityPatchDate(customPatchDate.value.trim()))
 const customPatchInvalid = computed(
@@ -173,6 +212,20 @@ const patchBusy = computed(() => props.securityPatchBusy !== null)
       >
         <template #start>
           <span class="lite-actions__icon"><MiuixIcon :icon="Photos" :size="23" /></span>
+        </template>
+      </MiuixArrowPreference>
+
+      <MiuixArrowPreference
+        :title="tr('settings_cloud_interval', 'Cloud update interval')"
+        :summary="cloudInterval === null
+          ? tr('settings_cloud_interval_loading', 'Reading the current period')
+          : tr('settings_cloud_interval_value', 'Every %s minutes').replace('%s', String(cloudInterval))"
+        :disabled="cloudIntervalBusy"
+        :hold-down="cloudIntervalBusy"
+        @click="promptCloudInterval"
+      >
+        <template #start>
+          <span class="lite-actions__icon"><MiuixIcon :icon="Update" :size="23" /></span>
         </template>
       </MiuixArrowPreference>
 

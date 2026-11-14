@@ -485,6 +485,49 @@ fn cloud_interval(paths: &Paths) -> Duration {
     Duration::from_secs(minutes * 60)
 }
 
+/// Current polling period in minutes, clamped to the accepted range.
+fn cloud_interval_minutes(paths: &Paths) -> u64 {
+    read_file(&paths.module.join("r1-cloud.json"), STATS_LIMIT)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|value| value.get("cloud_interval_minutes").and_then(Value::as_u64))
+        .filter(|minutes| *minutes >= 1 && *minutes <= MAX_CLOUD_INTERVAL_MINUTES)
+        .unwrap_or(DEFAULT_CLOUD_INTERVAL_MINUTES)
+}
+
+/// Persist a new polling period.
+///
+/// The file is rewritten whole and replaced atomically: the monitor reads it
+/// from a different process, so a half-written file must never be observable.
+/// Only the one documented key is written, so a future field would be lost --
+/// acceptable while this is the only setting stored here.
+fn set_cloud_interval_minutes(paths: &Paths, minutes: u64) -> Result<()> {
+    if minutes < 1 || minutes > MAX_CLOUD_INTERVAL_MINUTES {
+        return Err(format!(
+            "cloud interval must be between 1 and {MAX_CLOUD_INTERVAL_MINUTES} minutes"
+        ));
+    }
+    let path = paths.module.join("r1-cloud.json");
+    let body = serde_json::json!({ "cloud_interval_minutes": minutes });
+    let encoded = serde_json::to_vec_pretty(&body)
+        .map_err(|_| "cannot encode the cloud interval".to_string())?;
+    let temporary = paths
+        .module
+        .join(format!(".r1-cloud.json.tmp-{}", std::process::id()));
+    {
+        let mut file = File::create(&temporary).map_err(|_| "cannot write the cloud interval")?;
+        file.write_all(&encoded)
+            .map_err(|_| "cannot write the cloud interval")?;
+        file.sync_all()
+            .map_err(|_| "cannot flush the cloud interval")?;
+    }
+    fs::rename(&temporary, &path).map_err(|_| {
+        let _ = fs::remove_file(&temporary);
+        "cannot replace the cloud interval".to_string()
+    })?;
+    Ok(())
+}
+
 fn retry_delay(failures: u32, interval: Duration) -> Duration {
     let multiplier = 1u64 << failures.saturating_sub(1).min(5);
     Duration::from_secs((CLOUD_RETRY_MIN.as_secs() * multiplier).min(interval.as_secs()))
@@ -1148,11 +1191,21 @@ fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
 }
 
 pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
-    let command = args.next().ok_or("usage: r1-helper status|cloud-update|monitor|first-touch")?;
-    if args.next().is_some()
-        || !matches!(command.as_str(), "status" | "cloud-update" | "monitor" | "first-touch")
-    {
-        return Err("usage: r1-helper status|cloud-update|monitor|first-touch".into());
+    let usage = "usage: r1-helper status|cloud-update|monitor|first-touch|cloud-interval [minutes]";
+    let command = args.next().ok_or(usage)?;
+    if !matches!(
+        command.as_str(),
+        "status" | "cloud-update" | "monitor" | "first-touch" | "cloud-interval"
+    ) {
+        return Err(usage.into());
+    }
+    // Only cloud-interval takes an argument; everything else must be bare.
+    let argument = args.next();
+    if argument.is_some() && command != "cloud-interval" {
+        return Err(usage.into());
+    }
+    if args.next().is_some() {
+        return Err(usage.into());
     }
     let paths = Paths::default();
     if command == "first-touch" {
@@ -1164,6 +1217,18 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
         let interval = cloud_interval(&paths);
         let checked = status(local_status(&paths), &CloudObservation::load(&paths), interval);
         println!("{}", serde_json::to_string(&checked).map_err(|_| "cannot encode status")?);
+        return Ok(());
+    }
+    if command == "cloud-interval" {
+        // Reading is argument-free; writing takes the new value in minutes.
+        if let Some(raw) = argument {
+            let minutes: u64 = raw
+                .parse()
+                .map_err(|_| "cloud interval must be a whole number of minutes".to_string())?;
+            set_cloud_interval_minutes(&paths, minutes)?;
+        }
+        let minutes = cloud_interval_minutes(&paths);
+        println!("{{\"ok\":true,\"minutes\":{minutes}}}");
         return Ok(());
     }
     paths.prepare()?;

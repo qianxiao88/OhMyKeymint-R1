@@ -536,6 +536,27 @@ export class Cli {
     return { first: parsed.first, code: parsed.code, waitSeconds: parsed.wait_seconds, steps }
   }
 
+  /** Current cloud polling period, in minutes. */
+  async getCloudInterval(): Promise<number> {
+    const output = await this.#runR1('cloud-interval')
+    if (output.ok !== true || typeof output.minutes !== 'number') {
+      throw new Error('Invalid cloud interval response')
+    }
+    return output.minutes
+  }
+
+  /** Persist a new cloud polling period. Returns the value the helper stored. */
+  async setCloudInterval(minutes: number): Promise<number> {
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+      throw new Error('Cloud interval must be a whole number of minutes between 1 and 1440')
+    }
+    const output = await this.#runR1('cloud-interval', String(minutes))
+    if (output.ok !== true || typeof output.minutes !== 'number') {
+      throw new Error('Invalid cloud interval response')
+    }
+    return output.minutes
+  }
+
   async getR1Status(): Promise<{ ok: boolean, reason: string, cloud_connected: boolean }> {
     const output = await this.#runR1('status')
     if (typeof output.ok !== 'boolean' || typeof output.reason !== 'string'
@@ -544,7 +565,7 @@ export class Cli {
   }
 
   async #runR1(
-    action: 'cloud-update' | 'status' | 'first-touch',
+    action: 'cloud-update' | 'status' | 'first-touch' | 'cloud-interval',
     argument?: string,
   ): Promise<Record<string, unknown>> {
     const argumentSuffix = argument === undefined ? '' : ` ${shellQuote(argument)}`

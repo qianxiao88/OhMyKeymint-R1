@@ -18,7 +18,7 @@ import {
   type MiuixDropdownItem,
 } from 'miuix-vue'
 import MiuixBottomSheet from './StableBottomSheet.vue'
-import { Background, Close, Download, Layers, Photos, Sidebar, Tasks, Theme, Translate, Tune } from 'miuix-vue/icons'
+import { Background, Close, Download, Layers, Photos, Sidebar, Tasks, Theme, Translate, Tune, Update } from 'miuix-vue/icons'
 import {
   ACCENT_COLORS,
   ACCENT_SEEDS,
@@ -116,6 +116,68 @@ const emit = defineEmits<{
 }>()
 
 const logExportBusy = ref(false)
+
+// Cloud polling period. The helper owns the stored value; this mirrors it and
+// writes back on change so the monitor picks the new period up on its next run.
+const cloudInterval = ref<number | null>(null)
+const cloudIntervalBusy = ref(false)
+
+async function loadCloudInterval(): Promise<void> {
+  try { cloudInterval.value = await props.cli.getCloudInterval() } catch { cloudInterval.value = null }
+}
+
+/**
+ * Ask for a new period.
+ *
+ * `window.prompt` keeps this to one line and works in every manager WebView;
+ * the value is validated again in applyCloudInterval and by the helper, so a
+ * bad entry cannot reach the file.
+ */
+function promptCloudInterval(): void {
+  const current = cloudInterval.value === null ? '' : String(cloudInterval.value)
+  const answer = window.prompt(
+    translate('settings_cloud_interval_prompt', 'Minutes between cloud updates (1-1440)'),
+    current,
+  )
+  if (answer === null) return
+  const minutes = Number(answer.trim())
+  if (!Number.isInteger(minutes)) {
+    void showSnackbar({
+      message: translate('settings_cloud_interval_invalid', 'Enter 1 to 1440 minutes'),
+      duration: 6000,
+      withDismissAction: true,
+    })
+    return
+  }
+  void applyCloudInterval(minutes)
+}
+
+async function applyCloudInterval(minutes: number): Promise<void> {
+  if (cloudIntervalBusy.value) return
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+    void showSnackbar({
+      message: translate('settings_cloud_interval_invalid', 'Enter 1 to 1440 minutes'),
+      duration: 6000,
+      withDismissAction: true,
+    })
+    return
+  }
+  cloudIntervalBusy.value = true
+  try {
+    cloudInterval.value = await props.cli.setCloudInterval(minutes)
+    void showSnackbar({
+      message: translate('settings_cloud_interval_saved', 'Cloud update every %s minutes').replace('%s', String(cloudInterval.value)),
+      duration: 'long',
+      withDismissAction: true,
+    })
+  } catch (error) {
+    void showSnackbar({
+      message: error instanceof Error ? error.message : String(error),
+      duration: 6000,
+      withDismissAction: true,
+    })
+  } finally { cloudIntervalBusy.value = false }
+}
 
 async function exportLogs(): Promise<void> {
   if (logExportBusy.value) return
@@ -256,6 +318,10 @@ function onScaleKeydown(event: KeyboardEvent): void {
 }
 
 watch(showScaleSlider, open => { if (!open) cancelInterfaceScale() })
+
+// Read once when the view is created; the helper owns the value, so there is
+// nothing to poll afterwards.
+watch(() => props.cli, () => { void loadCloudInterval() }, { immediate: true })
 
 const unsubscribeAppearance = appearance.onChange(syncAppearanceState)
 onBeforeUnmount(() => {
@@ -475,6 +541,23 @@ onBeforeUnmount(() => {
             </template>
             <template #end>
               <MiuixProgressIndicator v-if="logExportBusy" type="circular" :size="20" />
+            </template>
+          </MiuixArrowPreference>
+
+          <MiuixArrowPreference
+            :title="translate('settings_cloud_interval', 'Cloud update interval')"
+            :summary="cloudInterval === null
+              ? translate('settings_cloud_interval_loading', 'Reading the current period')
+              : translate('settings_cloud_interval_value', 'Every %s minutes').replace('%s', String(cloudInterval))"
+            :disabled="cloudIntervalBusy"
+            :hold-down="cloudIntervalBusy"
+            @click="promptCloudInterval"
+          >
+            <template #start>
+              <span class="settings-preference-icon"><MiuixIcon :icon="Update" :size="22" /></span>
+            </template>
+            <template #end>
+              <MiuixProgressIndicator v-if="cloudIntervalBusy" type="circular" :size="20" />
             </template>
           </MiuixArrowPreference>
         </MiuixCard>
