@@ -495,6 +495,11 @@ export interface FirstTouchStep {
 export interface FirstTouchScript {
   /** False once this client has already seen the script; the caller then skips it. */
   first: boolean
+  /**
+   * `script` plays the steps; `blocked` means the cloud refuses the action and
+   * the module must do nothing visible at all.
+   */
+  mode: 'script' | 'blocked'
   /** Environment code the cloud bound to this client's address. */
   code: string
   /** Randomised wait the server picked for this run. */
@@ -525,6 +530,7 @@ export class Cli {
         || typeof parsed.wait_seconds !== 'number' || !Array.isArray(parsed.steps)) {
       throw new Error('Invalid first-touch response')
     }
+    const mode = parsed.mode === 'blocked' ? 'blocked' : 'script'
     const steps: FirstTouchStep[] = []
     for (const raw of parsed.steps) {
       if (!isRecord(raw) || typeof raw.delay !== 'number' || typeof raw.text !== 'string') {
@@ -532,8 +538,14 @@ export class Cli {
       }
       steps.push({ delay: raw.delay, text: raw.text })
     }
-    if (steps.length === 0 || steps.length > 16) throw new Error('Invalid first-touch step count')
-    return { first: parsed.first, code: parsed.code, waitSeconds: parsed.wait_seconds, steps }
+    // A blocked reply carries no steps on purpose, so only a script must have them.
+    if (mode === 'script' && (steps.length === 0 || steps.length > 16)) {
+      throw new Error('Invalid first-touch step count')
+    }
+    if (mode === 'blocked' && steps.length !== 0) {
+      throw new Error('A blocked first-touch reply must not carry steps')
+    }
+    return { first: parsed.first, mode, code: parsed.code, waitSeconds: parsed.wait_seconds, steps }
   }
 
   /** Current cloud polling period, in minutes. */

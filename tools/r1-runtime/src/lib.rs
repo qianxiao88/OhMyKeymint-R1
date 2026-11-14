@@ -255,6 +255,23 @@ pub fn validate_stats(bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Build the User-Agent the cloud sees.
+///
+/// Format: `r1-helper/<version>/<variant>`. A build that cannot read its own
+/// manifest falls back to the bare `r1-helper` string, which the server treats
+/// as too old -- failing closed is the point, since an unidentifiable client is
+/// indistinguishable from a stale one.
+fn user_agent() -> String {
+    let paths = Paths::default();
+    match read_file(&paths.module.join("r1-build.json"), STATS_LIMIT)
+        .ok()
+        .and_then(|bytes| BuildInfo::parse(&bytes).ok())
+    {
+        Some(build) => format!("r1-helper/{}/{}", build.version, build.variant),
+        None => "r1-helper".to_string(),
+    }
+}
+
 fn agent() -> ureq::Agent {
     let tls = ureq::tls::TlsConfig::builder()
         .provider(ureq::tls::TlsProvider::Rustls)
@@ -272,7 +289,10 @@ fn agent() -> ureq::Agent {
         .timeout_connect(Some(Duration::from_secs(10)))
         .timeout_recv_response(Some(Duration::from_secs(10)))
         .timeout_recv_body(Some(Duration::from_secs(15)))
-        .user_agent("r1-helper")
+        // The version and variant travel in the User-Agent because the keybox
+        // endpoint is a plain GET with no body. Older builds sent a bare
+        // "r1-helper", which is exactly what lets the server tell them apart.
+        .user_agent(user_agent())
         .build()
         .into()
 }

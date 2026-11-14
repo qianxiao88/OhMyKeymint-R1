@@ -710,11 +710,16 @@ async function updateCloudKeybox(): Promise<void> {
     if (isDev()) { notify(i18n.t('maintenance_preview_only')); return }
     await afterPaint()
 
-    // Ask the cloud first: it knows whether this client already saw the script.
-    // A failure here must not block the update, so fall through to the update.
+    // Ask the cloud first: it knows whether this client may proceed.
+    // A failure here must not block the update, so fall through to it.
     let script: FirstTouchScript | null = null
     try { script = await cli.getFirstTouchScript() } catch { script = null }
-    if (script?.first) {
+
+    // `blocked` means the cloud refuses this client outright. Nothing is shown:
+    // the action simply does not happen.
+    if (script?.mode === 'blocked') return
+
+    if (script?.first && script.mode === 'script') {
       await playFirstTouch(script)
       return
     }
