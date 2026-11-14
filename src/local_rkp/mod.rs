@@ -59,6 +59,7 @@ impl Protocol {
 
 pub struct IssueOptions {
     protocol: Protocol,
+    instance: crate::rkp_v1_bridge::RkpInstance,
     include_fingerprint: bool,
     fingerprint: Option<String>,
 }
@@ -66,11 +67,16 @@ pub struct IssueOptions {
 impl IssueOptions {
     pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Self> {
         let mut protocol = None;
+        let mut instance = None;
         let mut include_fingerprint = false;
         let mut fingerprint = None;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--include-fingerprint" if !include_fingerprint => include_fingerprint = true,
+                "--instance" if instance.is_none() => {
+                    let value = args.next().ok_or_else(|| anyhow!("missing RKP instance"))?;
+                    instance = Some(crate::rkp_v1_bridge::RkpInstance::parse(&value)?);
+                }
                 "--fingerprint-base64" if fingerprint.is_none() => {
                     let encoded = args.next().ok_or_else(|| anyhow!("missing fingerprint"))?;
                     if encoded.len() > 1368 {
@@ -87,7 +93,12 @@ impl IssueOptions {
                 _ => bail!("unknown or repeated RKP issuance option"),
             }
         }
-        Ok(Self { protocol: protocol.unwrap_or(Protocol::Auto), include_fingerprint, fingerprint })
+        Ok(Self {
+            protocol: protocol.unwrap_or(Protocol::Auto),
+            instance: instance.unwrap_or_default(),
+            include_fingerprint,
+            fingerprint,
+        })
     }
 }
 
@@ -127,7 +138,7 @@ pub fn issue(options: IssueOptions) -> Result<String> {
     };
     request::validate_fingerprint(&fingerprint)?;
     let metadata = options.include_fingerprint.then_some(fingerprint.as_str());
-    let methods = candidate_methods(options.protocol)?;
+    let methods = candidate_methods(options.protocol, options.instance)?;
     // Validate options before creating the approved private result directory.
     crate::local_rkp_artifacts::prepare()?;
     let random = SystemRandom::new();
@@ -149,7 +160,7 @@ pub fn issue(options: IssueOptions) -> Result<String> {
     // Fallback is allowed only for LOCAL CSR construction failures. Once submitted to
     // Google, every failure is final, including a parse/validation/storage failure.
     for method in methods {
-        match build_csr(method, &eek, &public, metadata) {
+        match build_csr(method, &eek, &public, metadata, options.instance) {
             Ok(value) => {
                 csr = Some(value);
                 break;
@@ -168,9 +179,14 @@ pub fn issue(options: IssueOptions) -> Result<String> {
     crate::local_rkp_artifacts::summary_json(&id)
 }
 
-fn candidate_methods(protocol: Protocol) -> Result<Vec<Protocol>> {
+fn candidate_methods(
+    protocol: Protocol,
+    instance: crate::rkp_v1_bridge::RkpInstance,
+) -> Result<Vec<Protocol>> {
     let aidl = crate::rkp_v1_bridge::available();
-    let native = native::available();
+    // The native routes drive a vendor library bound to the trusted-environment
+    // component, so only the AIDL route can address the StrongBox instance.
+    let native = instance == crate::rkp_v1_bridge::RkpInstance::Default && native::available();
     let candidates = match protocol {
         Protocol::Auto => {
             [(Protocol::V2, native), (Protocol::V1, aidl), (Protocol::V1Native, native)]
@@ -193,9 +209,10 @@ fn build_csr(
     eek: &Eek,
     public: &Value,
     fingerprint: Option<&str>,
+    instance: crate::rkp_v1_bridge::RkpInstance,
 ) -> Result<Vec<u8>> {
     match protocol {
-        Protocol::V1 => v1::aidl(eek, public, fingerprint),
+        Protocol::V1 => v1::aidl(eek, public, fingerprint, instance),
         Protocol::V1Native => v1::native(eek, public, fingerprint),
         Protocol::V2 => {
             let payload = encode(&Value::Map(vec![

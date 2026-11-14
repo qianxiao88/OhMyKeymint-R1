@@ -41,6 +41,9 @@ public final class RkpV1Bridge {
     private static final String PREFIX = "android.hardware.security.keymint.";
     private static final String SERVICE = PREFIX + "IRemotelyProvisionedComponent";
     private static final int LIMIT = 0xa000;
+    private static final String DEFAULT_INSTANCE = "default";
+    private static final String STRONGBOX_INSTANCE = "strongbox";
+    private static final int INSTANCE_LIMIT = 16;
 
     public static void main(String[] args) throws Exception {
         if (args.length != 1) throw new IllegalArgumentException("expected exchange directory");
@@ -67,6 +70,33 @@ public final class RkpV1Bridge {
         }
     }
 
+    /**
+     * Reads the requested RKP instance. The selector file is the only thing that picks the
+     * instance, so an unexpected value never reaches the service name.
+     */
+    private static String readInstance(File directory) throws IOException {
+        File file = new File(directory, "instance.txt");
+        long length = file.length();
+        if (length <= 0 || length > INSTANCE_LIMIT) {
+            throw new IOException("invalid RKP instance selector length");
+        }
+        byte[] raw = new byte[(int) length];
+        try (FileInputStream input = new FileInputStream(file)) {
+            int offset = 0;
+            while (offset < raw.length) {
+                int read = input.read(raw, offset, raw.length - offset);
+                if (read < 0) throw new IOException("short RKP instance selector");
+                offset += read;
+            }
+            if (input.read() != -1) throw new IOException("trailing RKP instance selector bytes");
+        }
+        String value = new String(raw, StandardCharsets.US_ASCII).trim();
+        if (!DEFAULT_INSTANCE.equals(value) && !STRONGBOX_INSTANCE.equals(value)) {
+            throw new IOException("unsupported RKP instance selector");
+        }
+        return value;
+    }
+
     private static byte[] request(File directory) throws Exception {
         byte[] challenge, maced, p256, x25519;
         try (DataInputStream input = new DataInputStream(
@@ -80,10 +110,11 @@ public final class RkpV1Bridge {
         if (challenge.length == 0 || challenge.length > 64 || maced.length == 0) {
             throw new IOException("invalid challenge or MacedPublicKey");
         }
+        String instance = readInstance(directory);
         Class<?> binder = Class.forName("android.os.IBinder");
         Object service = Class.forName("android.os.ServiceManager")
-                .getMethod("checkService", String.class).invoke(null, SERVICE + "/default");
-        if (service == null) throw new IOException("RKP default service is unavailable");
+                .getMethod("checkService", String.class).invoke(null, SERVICE + "/" + instance);
+        if (service == null) throw new IOException("RKP " + instance + " service is unavailable");
         Class<?> api = Class.forName(SERVICE);
         Object proxy = Class.forName(SERVICE + "$Stub")
                 .getMethod("asInterface", binder).invoke(null, service);

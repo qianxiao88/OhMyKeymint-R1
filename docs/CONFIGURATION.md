@@ -1567,6 +1567,18 @@ after submission must not be treated as permission to retry blindly.
 Each network operation is bounded to 30 seconds and 256 KiB of response;
 each local bridge/worker is bounded to 30 seconds.
 
+**RKP instance** selects which device RKP component supplies the evidence:
+`default` uses `IRemotelyProvisionedComponent/default`, and `strongbox` uses
+`IRemotelyProvisionedComponent/strongbox`. The instance decides the security
+level Google places in the issued chain, so a StrongBox selection produces
+certificates whose leaf Subject organization is `O=StrongBox`. The native
+protocols drive a vendor library bound to the trusted-environment component, so
+only the V1 AIDL protocol can address the StrongBox instance; a StrongBox
+selection therefore removes the native candidates during fallback. A device
+without a discrete secure element has no `strongbox` service, and the exchange
+then fails with an unavailable-service error instead of falling back to the
+trusted environment.
+
 **Include build fingerprint in signing request** is off by default. The
 effective fingerprint is always sent when fetching the challenge; this option
 also adds it as unverified metadata in the signing CSR. V1 places it in the
@@ -1600,11 +1612,15 @@ Root-only helper commands:
 
 ```sh
 keymint --webui-rkp-issue --confirm-issuance auto
+keymint --webui-rkp-issue --confirm-issuance auto --instance strongbox
 keymint --webui-rkp-list
 keymint --webui-rkp-import <32-lowercase-hex-id> --confirm-replace
 ```
 
 The optional protocol argument accepts `auto`, `v1`, `v2`, or `v1-native`.
+The optional `--instance` argument accepts `default` or `strongbox` and defaults
+to `default`; use `v1` together with `strongbox`, because the native protocols
+cannot address the StrongBox instance.
 Add `--include-fingerprint` to include unsigned CSR metadata, and optionally
 `--fingerprint-base64 <standard-base64-utf8>` to override the build fingerprint
 for this issuance. Without an override the current device property is read

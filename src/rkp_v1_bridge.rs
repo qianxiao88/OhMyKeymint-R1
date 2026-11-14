@@ -31,6 +31,40 @@ const APP_PROCESS: &str = "/system/bin/app_process";
 const MAIN_CLASS: &str = "duck.rkp.RkpV1Bridge";
 const MAX_FIELD: usize = 0xa000;
 const MAX_REQUEST: usize = 4 * (4 + MAX_FIELD);
+#[cfg(all(target_os = "android", target_arch = "aarch64"))]
+const INSTANCE_FILE: &str = "instance.txt";
+
+/// Device RKP component instance that supplies the hardware evidence.
+///
+/// The instance decides which security level the device evidence originates
+/// from, and therefore which organization Google's provisioning service places
+/// in the issued certificates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RkpInstance {
+    /// `IRemotelyProvisionedComponent/default`, the trusted-environment instance.
+    #[default]
+    Default,
+    /// `IRemotelyProvisionedComponent/strongbox`, present only on devices with a
+    /// discrete secure element.
+    Strongbox,
+}
+
+impl RkpInstance {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "default" => Ok(Self::Default),
+            "strongbox" => Ok(Self::Strongbox),
+            _ => bail!("RKP instance must be default or strongbox"),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Strongbox => "strongbox",
+        }
+    }
+}
 #[cfg(any(all(target_os = "android", target_arch = "aarch64"), test))]
 const MAX_REPLY: usize = 4 + 3 * (4 + MAX_FIELD);
 #[cfg(all(target_os = "android", target_arch = "aarch64"))]
@@ -43,7 +77,7 @@ const BRIDGE_JAR: &[u8] = include_bytes!(env!("OMK_RKP_V1_BRIDGE_JAR"));
 
 /// Run one pre-encoded V1 bridge exchange and return its bounded wire response.
 /// The caller owns request construction and all subsequent RKP signing logic.
-pub fn exchange(encoded_request: &[u8]) -> Result<Vec<u8>> {
+pub fn exchange(encoded_request: &[u8], instance: RkpInstance) -> Result<Vec<u8>> {
     validate_request(encoded_request)?;
 
     #[cfg(all(target_os = "android", target_arch = "aarch64"))]
@@ -51,12 +85,12 @@ pub fn exchange(encoded_request: &[u8]) -> Result<Vec<u8>> {
         if unsafe { libc::geteuid() } != 0 {
             bail!("RKP V1 bridge requires root");
         }
-        run_android(encoded_request)
+        run_android(encoded_request, instance)
     }
 
     #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
     {
-        let _ = encoded_request;
+        let _ = (encoded_request, instance);
         bail!("RKP V1 bridge is available only on Android arm64");
     }
 }
@@ -111,9 +145,9 @@ fn validate_request(bytes: &[u8]) -> Result<()> {
 }
 
 #[cfg(all(target_os = "android", target_arch = "aarch64"))]
-fn run_android(encoded_request: &[u8]) -> Result<Vec<u8>> {
+fn run_android(encoded_request: &[u8], instance: RkpInstance) -> Result<Vec<u8>> {
     let mut exchange = ExchangeDir::create()?;
-    let result = run_exchange(&exchange.path, encoded_request);
+    let result = run_exchange(&exchange.path, encoded_request, instance);
     let cleanup = exchange.cleanup();
     match (result, cleanup) {
         (Ok(reply), Ok(())) => Ok(reply),
@@ -126,11 +160,16 @@ fn run_android(encoded_request: &[u8]) -> Result<Vec<u8>> {
 }
 
 #[cfg(all(target_os = "android", target_arch = "aarch64"))]
-fn run_exchange(directory: &Path, encoded_request: &[u8]) -> Result<Vec<u8>> {
+fn run_exchange(
+    directory: &Path,
+    encoded_request: &[u8],
+    instance: RkpInstance,
+) -> Result<Vec<u8>> {
     let jar_path = directory.join("bridge.jar");
     write_private_file(&jar_path, BRIDGE_JAR, 0o600)?;
     fs::set_permissions(&jar_path, fs::Permissions::from_mode(0o400))?;
     write_private_file(&directory.join("request.bin"), encoded_request, 0o600)?;
+    write_private_file(&directory.join(INSTANCE_FILE), instance.as_str().as_bytes(), 0o600)?;
 
     let apk = find_aidl_apk()?;
     let mut child = bridge_command(directory, &jar_path, &apk)
@@ -336,6 +375,17 @@ mod tests {
             bytes.extend_from_slice(field);
         }
         bytes
+    }
+
+    #[test]
+    fn instance_selectors_are_exact() {
+        assert_eq!(RkpInstance::default(), RkpInstance::Default);
+        assert_eq!(RkpInstance::parse("default").unwrap(), RkpInstance::Default);
+        assert_eq!(RkpInstance::parse("strongbox").unwrap(), RkpInstance::Strongbox);
+        assert_eq!(RkpInstance::Strongbox.as_str(), "strongbox");
+        for invalid in ["", "Strongbox", " tee", "default/strongbox", "sb"] {
+            assert!(RkpInstance::parse(invalid).is_err());
+        }
     }
 
     #[test]

@@ -7,14 +7,19 @@ use anyhow::{anyhow, bail, Result};
 use kmr_wire::cbor::value::Value;
 use ring::rand::{SecureRandom, SystemRandom};
 
-pub(super) fn aidl(eek: &Eek, public: &Value, fingerprint: Option<&str>) -> Result<Vec<u8>> {
+pub(super) fn aidl(
+    eek: &Eek,
+    public: &Value,
+    fingerprint: Option<&str>,
+    instance: crate::rkp_v1_bridge::RkpInstance,
+) -> Result<Vec<u8>> {
     let maced = cose::maced_key(public)?;
     let mut request = Vec::new();
     for field in [&eek.challenge, &maced, &eek.p256, &eek.x25519] {
         request.extend_from_slice(&(field.len() as u32).to_be_bytes());
         request.extend_from_slice(field);
     }
-    let reply = crate::rkp_v1_bridge::exchange(&request)?;
+    let reply = crate::rkp_v1_bridge::exchange(&request, instance)?;
     parse_bridge(&reply, &eek.challenge, public, fingerprint)
 }
 
