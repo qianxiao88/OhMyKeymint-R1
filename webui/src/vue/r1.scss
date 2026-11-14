@@ -1,31 +1,77 @@
-// Keep the bitmap sharp; glass and glyph-sized halos provide local separation.
+// Light glass skin.
+//
+// Design notes:
+// - No backdrop blur anywhere: this file only layers transparency, gradients,
+//   hairline edges and soft shadows. Blur was removed deliberately because it
+//   was the dominant jank source on Android WebView.
+// - Readability over the wallpaper comes from a translucent veil painted
+//   between the image and the app, not from text halos alone.
+// - Every value here is a custom property or a plain rgba(), so nothing depends
+//   on `color-mix()` (Chrome 111+) while the build targets Chrome 94.
+
 :root {
-  --r1-paper: #f7fafc;
-  --r1-ink: #18232d;
-  --r1-muted: #475563;
-  --r1-accent: #155a9c;
-  --r1-error: #a32525;
-  --r1-glass: rgb(255 255 255 / 20%);
-  --r1-control: rgb(255 255 255 / 26%);
-  --r1-halo: rgb(255 255 255 / 95%);
-  --r1-edge: rgb(255 255 255 / 48%);
-  --r1-shadow: rgb(22 42 60 / 12%);
-  --r1-canvas: linear-gradient(155deg, #f3f8fc, #e5eef4 60%, #edf5f4);
+  // Base paper: the lightest canvas stop. Kept as a token because the contrast
+  // guard checks every ink colour against it; never used as a flat background.
+  --r1-paper: #f7fafd;
+
+  // Ink
+  --r1-ink: #16202a;
+  --r1-muted: #5c6b7a;
+  --r1-accent: #1668b3;
+  --r1-accent-soft: rgb(22 104 179 / 12%);
+  --r1-accent-edge: rgb(22 104 179 / 38%);
+  --r1-error: #b3261e;
+  --r1-error-soft: rgb(179 38 30 / 12%);
+
+  // Glass recipe: a sheen gradient on top of a translucent fill.
+  --r1-glass: rgb(255 255 255 / 44%);
+  --r1-glass-strong: rgb(255 255 255 / 66%);
+  --r1-control: rgb(255 255 255 / 58%);
+  --r1-sheen: linear-gradient(180deg, rgb(255 255 255 / 52%) 0%, rgb(255 255 255 / 16%) 100%);
+  --r1-sheen-top: rgb(255 255 255 / 88%);
+  --r1-edge: rgb(255 255 255 / 72%);
+  --r1-halo: rgb(255 255 255 / 50%);
+
+  // Separation
+  --r1-shadow: rgb(21 40 60 / 10%);
+  --r1-shadow-soft: rgb(21 40 60 / 6%);
+
+  // Radii
+  --r1-radius-card: 22px;
+  --r1-radius-control: 14px;
+  --r1-radius-pill: 30px;
+
+  // Canvas and the veil that softens the wallpaper without blurring it.
+  --r1-canvas: linear-gradient(160deg, #f7fafd 0%, #eaf1f7 55%, #eef6f5 100%);
+  --r1-veil: linear-gradient(180deg, rgb(247 250 253 / 46%) 0%, rgb(238 245 251 / 30%) 45%, rgb(238 246 245 / 48%) 100%);
+
   &.m-theme-dark {
-    --r1-paper: #19232c;
-    --r1-ink: #f1f6fa;
-    --r1-muted: #bdcbd7;
-    --r1-accent: #9dccff;
-    --r1-error: #ffb4b4;
-    --r1-glass: rgb(18 25 30 / 24%);
-    --r1-control: rgb(18 25 30 / 32%);
-    --r1-halo: rgb(7 13 18 / 95%);
-    --r1-edge: rgb(224 241 255 / 25%);
-    --r1-shadow: rgb(0 0 0 / 24%);
-    --r1-canvas: linear-gradient(155deg, #15202a, #1e2c36 60%, #203330);
+    --r1-paper: #101820;
+    --r1-ink: #eef4fa;
+    --r1-muted: #a6b6c5;
+    --r1-accent: #8fc6ff;
+    --r1-accent-soft: rgb(143 198 255 / 16%);
+    --r1-accent-edge: rgb(143 198 255 / 40%);
+    --r1-error: #ffb4ab;
+    --r1-error-soft: rgb(255 180 171 / 16%);
+
+    --r1-glass: rgb(20 28 36 / 56%);
+    --r1-glass-strong: rgb(20 28 36 / 74%);
+    --r1-control: rgb(34 44 54 / 70%);
+    --r1-sheen: linear-gradient(180deg, rgb(255 255 255 / 9%) 0%, rgb(255 255 255 / 2%) 100%);
+    --r1-sheen-top: rgb(255 255 255 / 16%);
+    --r1-edge: rgb(255 255 255 / 14%);
+    --r1-halo: rgb(6 12 18 / 45%);
+
+    --r1-shadow: rgb(0 0 0 / 32%);
+    --r1-shadow-soft: rgb(0 0 0 / 20%);
+
+    --r1-canvas: linear-gradient(160deg, #101820 0%, #16212b 55%, #16262a 100%);
+    --r1-veil: linear-gradient(180deg, rgb(16 24 32 / 52%) 0%, rgb(22 33 43 / 34%) 45%, rgb(22 38 42 / 52%) 100%);
   }
 }
 
+// Layer 0: the wallpaper bitmap, kept sharp.
 html::before {
   content: '';
   position: fixed;
@@ -38,19 +84,31 @@ html::before {
   pointer-events: none;
 }
 
-// The ID deliberately outranks app.scss's preference/Monet selectors and
-// Vue's scoped backgrounds without changing component layout or behavior.
+// Layer 0.5: a translucent veil painted after the bitmap so glass surfaces and
+// text stay legible without any filter work.
+html::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: var(--r1-veil);
+  pointer-events: none;
+}
+
+// The ID deliberately outranks app.scss's preference/Monet selectors and Vue's
+// scoped backgrounds without changing component layout or behavior.
 html:root:is(html, #app) {
   --omk-top-bar-fill: transparent;
   --omk-system-bar-background: transparent;
   --omk-bar-background: transparent;
 }
+
 html:root:is(html, #app) {
   background: var(--r1-canvas);
   body, #app, .omk-app, .page-host, .settings-view, .targets-view { background: transparent !important; }
   #app { position: relative; z-index: 1; }
 
-  // Full-width layers never sample or veil the wallpaper.
+  // Full-width layers never veil or sample the wallpaper.
   body::before, body::after,
   .m-top-app-bar, .targets-top-bar, .m-top-app-bar::before, .targets-top-bar::before {
     background: transparent !important;
@@ -61,18 +119,25 @@ html:root:is(html, #app) {
   }
 
   :is(#app, body) { color: var(--r1-ink); }
+
+  // ---- Card surface ------------------------------------------------------
   :is(.m-card, .m-surface, .target-app-row, .main-navigation,
       .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup) {
-    background: linear-gradient(155deg, rgb(255 255 255 / 10%), transparent 38%), var(--r1-glass) !important;
+    background: var(--r1-sheen), var(--r1-glass) !important;
     border: 1px solid var(--r1-edge) !important;
-    border-radius: 24px;
-    box-shadow: inset 0 1px 0 var(--r1-edge), 0 4px 16px var(--r1-shadow) !important;
+    border-radius: var(--r1-radius-card);
+    box-shadow:
+      inset 0 1px 0 var(--r1-sheen-top),
+      0 2px 6px var(--r1-shadow),
+      0 12px 32px var(--r1-shadow-soft) !important;
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
     color: var(--r1-ink);
   }
 
-  // Text remains on the shared glass surface, without opaque nested plates.
+  // ---- Text on glass -----------------------------------------------------
+  // A single soft halo replaces the four-direction outline: it still separates
+  // glyphs from a busy photo but no longer rings the type.
   :is(.m-basic-component__center, .m-basic-component__end,
       .status-hero__text, .identity-field, .diagnostics-heading h2,
       .diagnostics-heading > span, .diagnostics-service, .diagnostics-empty,
@@ -88,8 +153,7 @@ html:root:is(html, #app) {
       .m-dialog__title, .m-dialog__summary, .m-bottom-sheet__title) {
     background: transparent !important;
     color: var(--r1-ink) !important;
-    text-shadow: 0 1px 1px var(--r1-halo), 0 -1px 1px var(--r1-halo),
-      1px 0 1px var(--r1-halo), -1px 0 1px var(--r1-halo);
+    text-shadow: 0 1px 2px var(--r1-halo);
     overflow-wrap: anywhere;
   }
   :is(.m-basic-component__center, .m-basic-component__end, .status-hero__text,
@@ -106,58 +170,91 @@ html:root:is(html, #app) {
   .diagnostics-service dd[data-tone='ok'] { color: var(--r1-accent) !important; }
   .diagnostics-service dd[data-tone='error'] { color: var(--r1-error) !important; }
 
+  // ---- Controls ----------------------------------------------------------
   :is(.m-button, .m-icon-button, .target-app-settings, .m-dropdown-preference__item,
       .m-navigation-bar__label, .m-navigation-bar__icon, input, textarea) {
     background: var(--r1-control) !important;
     color: var(--r1-ink) !important;
-    border-radius: 16px;
+    border-radius: var(--r1-radius-control);
     text-shadow: 0 1px 2px var(--r1-halo);
   }
-  .m-button { white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
-  .m-button--primary { box-shadow: inset 0 0 0 2px var(--r1-accent); color: var(--r1-accent) !important; }
+  .m-button {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+    border: 1px solid var(--r1-edge);
+    box-shadow: inset 0 1px 0 var(--r1-sheen-top);
+  }
+  .m-button--primary {
+    background: var(--r1-accent-soft) !important;
+    border-color: var(--r1-accent-edge);
+    box-shadow: inset 0 0 0 1px var(--r1-accent-edge);
+    color: var(--r1-accent) !important;
+  }
   :is(.m-button--disabled, .m-icon-button--disabled, .m-basic-component--disabled) {
-    opacity: 1;
+    opacity: .55;
     color: var(--r1-muted) !important;
+    box-shadow: none;
   }
   :is(button, input, textarea, .m-basic-component):focus-visible {
     outline: 2px solid var(--r1-accent);
     outline-offset: -2px;
   }
 
-  .main-navigation { border-radius: 32px; }
-  .m-navigation-bar__item { opacity: 1 !important; }
+  // ---- Navigation --------------------------------------------------------
+  .main-navigation { border-radius: var(--r1-radius-pill); }
+  .m-navigation-bar__item { opacity: 1 !important; border-radius: var(--r1-radius-control); }
+  .m-navigation-bar__item--selected { background: var(--r1-accent-soft) !important; }
   .m-navigation-bar__item--selected .m-navigation-bar__label {
     color: var(--r1-accent) !important;
-    box-shadow: inset 0 -2px var(--r1-accent);
+    box-shadow: none;
   }
   .m-navigation-bar__label, .m-navigation-bar__icon {
     background: transparent !important;
     text-shadow: 0 1px 2px var(--r1-halo);
   }
-  .m-navigation-bar__label { padding: 2px 6px; font-weight: 600; }
+  .m-navigation-bar__label { padding: 2px 6px; font-weight: 600; letter-spacing: .01em; }
   .m-navigation-bar__icon { border-radius: 50%; }
+
+  // ---- Headings and rhythm ----------------------------------------------
   .m-top-app-bar__title { opacity: 1 !important; min-width: 0; }
   .m-top-app-bar__title > .m-text { max-width: 100%; }
   .page-large-title, .r1-about { width: fit-content; max-width: 100%; opacity: 1; }
-  .m-small-title .m-text { display: inline-block; }
+  .m-small-title .m-text {
+    display: inline-block;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: .06em;
+    color: var(--r1-muted);
+  }
   .sheet-actions { background: transparent; }
-  // One in-flow heading replaces the empty sticky bar and duplicated large title.
+
+  // One in-flow heading replaces the empty sticky bar and duplicated title.
   .app-page > .m-top-app-bar, .settings-view > .m-top-app-bar { display: none; }
   .app-page, .settings-view { padding-top: calc(var(--omk-top-inset) / var(--omk-ui-scale) + 8px); }
-  .page-large-title { display: block; padding: 4px 4px 12px; font-size: 24px; line-height: 1.3; font-weight: 650; }
+  .page-large-title {
+    display: block;
+    padding: 4px 4px 14px;
+    font-size: 26px;
+    line-height: 1.25;
+    font-weight: 700;
+    letter-spacing: -.012em;
+  }
   .r1-module-name { font-size: 18px; }
-  .status-hero.m-card, .status-hero > .m-card { padding: 12px 14px; }
+  .status-hero.m-card, .status-hero > .m-card { padding: 14px 16px; }
   .status-hero__badge { width: 36px; height: 36px; }
-  .status-hero__text strong { font-size: 18px; }
+  .status-hero__text strong { font-size: 19px; letter-spacing: -.01em; }
   .identity-field { padding-top: 10px; }
   .m-basic-component__title, .m-basic-component__center > .m-text--headline1 { font-weight: 600; }
-  .settings-section + .settings-section { margin-top: 8px; }
-  .preference-section > .m-small-title, .settings-section > .m-small-title { padding-block: 6px; }
+  .settings-section + .settings-section { margin-top: 10px; }
+  .preference-section > .m-small-title, .settings-section > .m-small-title { padding-block: 8px 4px; }
 
-  // Nested component surfaces share the card's glass instead of stacking tints.
+  // ---- Nested surfaces ---------------------------------------------------
+  // They share the parent card's glass instead of stacking another tint.
   .m-card :is(.m-surface, .m-card), .m-basic-component,
   .m-dropdown-preference, .settings-dropdown {
     background: transparent !important;
+    box-shadow: none !important;
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }
@@ -166,9 +263,9 @@ html:root:is(html, #app) {
     backdrop-filter: none !important;
     background-image: none !important;
   }
-  // Stronger local glass keeps menus legible while the page stays transparent.
+  // Sheets and menus sit above the page, so they get the denser glass.
   .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup {
-    background: var(--r1-control) !important;
+    background: var(--r1-sheen), var(--r1-glass-strong) !important;
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }
@@ -178,23 +275,26 @@ html:root:is(html, #app) {
     box-shadow: inset 0 0 0 1px var(--r1-edge);
   }
   .targets-menu-popup {
-    background: var(--r1-control) !important;
+    background: var(--r1-sheen), var(--r1-glass-strong) !important;
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }
   .m-dialog__backdrop, .m-bottom-sheet__backdrop { background: transparent; }
   .m-bottom-sheet__overscroll { background: transparent; }
 
+  // WebViews without backdrop-filter never reach the glass recipe; fall back to
+  // the denser fill so text stays readable over the photo.
   @supports not ((backdrop-filter: none) or (-webkit-backdrop-filter: none)) {
     :is(.m-card, .m-surface, .target-app-row, .main-navigation,
         .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup) {
-      background: var(--r1-control) !important;
+      background: var(--r1-glass-strong) !important;
     }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
 }
+
 .r1-module-name { font-size: 24px; line-height: 1.3; overflow-wrap: anywhere; }
 .r1-about { padding: 0 16px; line-height: 1.7; overflow-wrap: anywhere; }
 .r1-lite { --omk-nav-clearance: var(--omk-bottom-inset); }

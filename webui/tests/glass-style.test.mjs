@@ -38,13 +38,13 @@ test('wallpaper fills the viewport with an unfiltered cover layer', () => {
 })
 
 test('glass uses small blur, compact transparent headers and translucent fallback', () => {
-  assert.match(style, /border-radius: 24px/)
-  assert.match(style, /box-shadow: inset 0 1px 0 var\(--r1-edge\)/)
+  assert.match(style, /border-radius: var\(--r1-radius-card\)/)
+  assert.match(style, /box-shadow:\s*\n?\s*inset 0 1px 0 var\(--r1-sheen-top\)/)
   for (const match of style.matchAll(/blur\((\d+)px\)/g)) assert.ok(Number(match[1]) <= 6)
   assert.match(style, /\.m-top-app-bar, \.targets-top-bar[^}]*backdrop-filter: none !important/s)
-  assert.match(style, /@supports not[^}]*background: var\(--r1-control\) !important/s)
+  assert.match(style, /@supports not[^}]*background: var\(--r1-glass-strong\) !important/s)
   assert.match(style, /\.app-page > \.m-top-app-bar, \.settings-view > \.m-top-app-bar \{ display: none; \}/)
-  assert.match(style, /\.page-large-title \{ display: block;/)
+  assert.match(style, /\.page-large-title \{\s*display: block;/)
   assert.match(style, /prefers-reduced-motion: reduce/)
   assert.match(style, /transition: none !important/)
   assert.match(style, /\.m-navigation-bar__item \{ opacity: 1 !important/)
