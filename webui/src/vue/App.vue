@@ -33,7 +33,9 @@ import SoterIdentityDialog from './SoterIdentityDialog.vue'
 import TargetsView from './TargetsView.vue'
 import ToolsView, { type ToolEvent } from './ToolsView.vue'
 import FileBrowserSheet from './FileBrowserSheet.vue'
+import WallpaperDialog from './WallpaperDialog.vue'
 import './app.scss'
+import './r1.scss'
 
 const cli = new Cli()
 const config = new ConfigOhMyKeyMint(cli)
@@ -87,6 +89,8 @@ const soterLocalDialog = ref<InstanceType<typeof SoterIdentityDialog> | null>(nu
 const keyboxOpen = ref(false)
 const selectedKeybox = ref<{ name: string, contents: Uint8Array } | null>(null)
 const keyboxBusy = ref(false)
+const cloudBusy = ref(false)
+const wallpaperOpen = ref(false)
 const targetsView = ref<InstanceType<typeof TargetsView> | null>(null)
 const settingsView = ref<InstanceType<typeof SettingsView> | null>(null)
 const toolsView = ref<InstanceType<typeof ToolsView> | null>(null)
@@ -666,6 +670,29 @@ function formatRkpCreatedAt(timestamp: number): string {
   return new Date(timestamp * 1000).toLocaleString(i18n.lang)
 }
 
+async function updateCloudKeybox(): Promise<void> {
+  if (cloudBusy.value || keyboxBusy.value) return
+  cloudBusy.value = true
+  try {
+    if (isDev()) { notify(i18n.t('maintenance_preview_only')); return }
+    await afterPaint()
+    const unchanged = await cli.cloudUpdate()
+    notify(unchanged ? '你的keybox是最新的啦' : '获取成功，正在载入')
+    await Promise.all([refreshIdentity(true), refreshDiagnostics()])
+  } catch {
+    notify('请检查你的网络哟', true)
+  } finally { cloudBusy.value = false }
+}
+
+async function openFeedback(): Promise<void> {
+  try {
+    if (isDev()) { notify(i18n.t('maintenance_preview_only')); return }
+    await cli.openFeedbackGroup()
+  } catch (error) {
+    notify(error instanceof Error ? error.message : String(error), true)
+  }
+}
+
 function onTool(event: ToolEvent): void {
   switch (event) {
     case 'openAppTargets': openTargets(); break
@@ -677,6 +704,9 @@ function onTool(event: ToolEvent): void {
     case 'repairRkp': rkpError.value = ''; rkpOpen.value = true; break
     case 'issueRkp': void openRkpIssue(); break
     case 'openSoterLocal': soterLocalOpen.value = true; break
+    case 'cloudUpdate': void updateCloudKeybox(); break
+    case 'feedback': void openFeedback(); break
+    case 'wallpaper': wallpaperOpen.value = true; break
   }
 }
 
@@ -887,7 +917,11 @@ watch(rkpImportConfirmOpen, open => {
           @clear-gms-cache="onTool('clearGmsCache')"
           @repair-rkp="onTool('repairRkp')"
           @issue-rkp="onTool('issueRkp')"
+          :cloud-busy="cloudBusy"
           @open-soter-local="onTool('openSoterLocal')"
+          @cloud-update="onTool('cloudUpdate')"
+          @feedback="onTool('feedback')"
+          @wallpaper="onTool('wallpaper')"
         />
       </Transition>
       <Transition name="page-switch">
@@ -966,6 +1000,8 @@ watch(rkpImportConfirmOpen, open => {
       @notify="notify"
       @changed="refreshIdentity(true)"
     />
+
+    <WallpaperDialog v-model="wallpaperOpen" @notify="notify" />
     <MiuixDialog
       :model-value="gmsConfirmOpen"
       :title="i18n.t('gms_cache_confirm_title')"

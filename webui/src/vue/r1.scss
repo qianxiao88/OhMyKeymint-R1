@@ -1,0 +1,202 @@
+// Keep the bitmap sharp; glass and glyph-sized halos provide local separation.
+:root {
+  --r1-paper: #f7fafc;
+  --r1-ink: #18232d;
+  --r1-muted: #475563;
+  --r1-accent: #155a9c;
+  --r1-error: #a32525;
+  --r1-glass: rgb(255 255 255 / 20%);
+  --r1-control: rgb(255 255 255 / 26%);
+  --r1-halo: rgb(255 255 255 / 95%);
+  --r1-edge: rgb(255 255 255 / 48%);
+  --r1-shadow: rgb(22 42 60 / 12%);
+  --r1-canvas: linear-gradient(155deg, #f3f8fc, #e5eef4 60%, #edf5f4);
+  &.m-theme-dark {
+    --r1-paper: #19232c;
+    --r1-ink: #f1f6fa;
+    --r1-muted: #bdcbd7;
+    --r1-accent: #9dccff;
+    --r1-error: #ffb4b4;
+    --r1-glass: rgb(18 25 30 / 24%);
+    --r1-control: rgb(18 25 30 / 32%);
+    --r1-halo: rgb(7 13 18 / 95%);
+    --r1-edge: rgb(224 241 255 / 25%);
+    --r1-shadow: rgb(0 0 0 / 24%);
+    --r1-canvas: linear-gradient(155deg, #15202a, #1e2c36 60%, #203330);
+  }
+}
+
+html::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-image: var(--r1-wallpaper, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+
+// The ID deliberately outranks app.scss's preference/Monet selectors and
+// Vue's scoped backgrounds without changing component layout or behavior.
+html:root:is(html, #app) {
+  --omk-top-bar-fill: transparent;
+  --omk-system-bar-background: transparent;
+  --omk-bar-background: transparent;
+}
+html:root:is(html, #app) {
+  background: var(--r1-canvas);
+  body, #app, .omk-app, .page-host, .settings-view, .targets-view { background: transparent !important; }
+  #app { position: relative; z-index: 1; }
+
+  // Full-width layers never sample or veil the wallpaper.
+  body::before, body::after,
+  .m-top-app-bar, .targets-top-bar, .m-top-app-bar::before, .targets-top-bar::before {
+    background: transparent !important;
+    border: 0;
+    box-shadow: none;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+
+  :is(#app, body) { color: var(--r1-ink); }
+  :is(.m-card, .m-surface, .target-app-row, .main-navigation,
+      .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup) {
+    background: linear-gradient(155deg, rgb(255 255 255 / 10%), transparent 38%), var(--r1-glass) !important;
+    border: 1px solid var(--r1-edge) !important;
+    border-radius: 24px;
+    box-shadow: inset 0 1px 0 var(--r1-edge), 0 4px 16px var(--r1-shadow) !important;
+    -webkit-backdrop-filter: blur(4px) !important;
+    backdrop-filter: blur(4px) !important;
+    color: var(--r1-ink);
+  }
+
+  // Text remains on the shared glass surface, without opaque nested plates.
+  :is(.m-basic-component__center, .m-basic-component__end,
+      .status-hero__text, .identity-field, .diagnostics-heading h2,
+      .diagnostics-heading > span, .diagnostics-service, .diagnostics-empty,
+      .m-small-title .m-text, .m-top-app-bar__title > .m-text,
+      .page-large-title, .r1-about, .targets-selection-heading,
+      .targets-user-heading, .targets-auto-state, .targets-empty,
+      .scale-preference__header, .confirm-sheet > p, .rkp-loading,
+      .rkp-fingerprint-field, .rkp-issued-item__metadata,
+      .file-path, .file-status > span, .file-status > p,
+      .pif-preview, .pif-status > span, .pif-sheet h3, .current-config-values,
+      .soter-note, .soter-error, .soter-cpu-field, .soter-local-sheet > strong,
+      .soter-identity-heading > strong,
+      .m-dialog__title, .m-dialog__summary, .m-bottom-sheet__title) {
+    background: transparent !important;
+    color: var(--r1-ink) !important;
+    text-shadow: 0 1px 1px var(--r1-halo), 0 -1px 1px var(--r1-halo),
+      1px 0 1px var(--r1-halo), -1px 0 1px var(--r1-halo);
+    overflow-wrap: anywhere;
+  }
+  :is(.m-basic-component__center, .m-basic-component__end, .status-hero__text,
+      .identity-field, .diagnostics-service, .scale-preference__header,
+      .rkp-issued-item__metadata, .current-config-values) :is(.m-text, span, strong, dt, dd, small, div, code) {
+    color: var(--r1-ink) !important;
+    opacity: 1;
+  }
+  :is(.m-basic-component__center .m-text--body2, .status-hero__text span,
+      .identity-field > span, .diagnostics-service dt, .diagnostics-service small,
+      .settings-dropdown__value, .scale-preference__summary, .scale-preference__value) {
+    color: var(--r1-muted) !important;
+  }
+  .diagnostics-service dd[data-tone='ok'] { color: var(--r1-accent) !important; }
+  .diagnostics-service dd[data-tone='error'] { color: var(--r1-error) !important; }
+
+  :is(.m-button, .m-icon-button, .target-app-settings, .m-dropdown-preference__item,
+      .m-navigation-bar__label, .m-navigation-bar__icon, input, textarea) {
+    background: var(--r1-control) !important;
+    color: var(--r1-ink) !important;
+    border-radius: 16px;
+    text-shadow: 0 1px 2px var(--r1-halo);
+  }
+  .m-button { white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
+  .m-button--primary { box-shadow: inset 0 0 0 2px var(--r1-accent); color: var(--r1-accent) !important; }
+  :is(.m-button--disabled, .m-icon-button--disabled, .m-basic-component--disabled) {
+    opacity: 1;
+    color: var(--r1-muted) !important;
+  }
+  :is(button, input, textarea, .m-basic-component):focus-visible {
+    outline: 2px solid var(--r1-accent);
+    outline-offset: -2px;
+  }
+
+  .main-navigation { border-radius: 32px; }
+  .m-navigation-bar__item { opacity: 1 !important; }
+  .m-navigation-bar__item--selected .m-navigation-bar__label {
+    color: var(--r1-accent) !important;
+    box-shadow: inset 0 -2px var(--r1-accent);
+  }
+  .m-navigation-bar__label, .m-navigation-bar__icon {
+    background: transparent !important;
+    text-shadow: 0 1px 2px var(--r1-halo);
+  }
+  .m-navigation-bar__label { padding: 2px 6px; font-weight: 600; }
+  .m-navigation-bar__icon { border-radius: 50%; }
+  .m-top-app-bar__title { opacity: 1 !important; min-width: 0; }
+  .m-top-app-bar__title > .m-text { max-width: 100%; }
+  .page-large-title, .r1-about { width: fit-content; max-width: 100%; opacity: 1; }
+  .m-small-title .m-text { display: inline-block; }
+  .sheet-actions { background: transparent; }
+  // One in-flow heading replaces the empty sticky bar and duplicated large title.
+  .app-page > .m-top-app-bar, .settings-view > .m-top-app-bar { display: none; }
+  .app-page, .settings-view { padding-top: calc(var(--omk-top-inset) / var(--omk-ui-scale) + 8px); }
+  .page-large-title { display: block; padding: 4px 4px 12px; font-size: 24px; line-height: 1.3; font-weight: 650; }
+  .r1-module-name { font-size: 18px; }
+  .status-hero.m-card, .status-hero > .m-card { padding: 12px 14px; }
+  .status-hero__badge { width: 36px; height: 36px; }
+  .status-hero__text strong { font-size: 18px; }
+  .identity-field { padding-top: 10px; }
+  .m-basic-component__title, .m-basic-component__center > .m-text--headline1 { font-weight: 600; }
+  .settings-section + .settings-section { margin-top: 8px; }
+  .preference-section > .m-small-title, .settings-section > .m-small-title { padding-block: 6px; }
+
+  // Nested component surfaces share the card's glass instead of stacking tints.
+  .m-card :is(.m-surface, .m-card), .m-basic-component,
+  .m-dropdown-preference, .settings-dropdown {
+    background: transparent !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+  .main-navigation::before, .main-navigation .m-navigation-bar__row::before {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    background-image: none !important;
+  }
+  // Stronger local glass keeps menus legible while the page stays transparent.
+  .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup {
+    background: var(--r1-control) !important;
+    -webkit-backdrop-filter: blur(6px) !important;
+    backdrop-filter: blur(6px) !important;
+  }
+  :is(.m-icon-button, .target-app-settings) {
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    box-shadow: inset 0 0 0 1px var(--r1-edge);
+  }
+  .targets-menu-popup {
+    background: var(--r1-control) !important;
+    -webkit-backdrop-filter: blur(6px) !important;
+    backdrop-filter: blur(6px) !important;
+  }
+  .m-dialog__backdrop, .m-bottom-sheet__backdrop { background: transparent; }
+  .m-bottom-sheet__overscroll { background: transparent; }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    :is(.m-card, .m-surface, .target-app-row, .main-navigation,
+        .m-dialog__content, .m-bottom-sheet__inner, .m-dropdown-preference__popup) {
+      background: var(--r1-control) !important;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+}
+.r1-module-name { font-size: 24px; line-height: 1.3; overflow-wrap: anywhere; }
+.r1-about { padding: 0 16px; line-height: 1.7; overflow-wrap: anywhere; }
+.r1-lite { --omk-nav-clearance: var(--omk-bottom-inset); }
+.r1-lite .home-page { padding-bottom: 0; }
+.r1-lite .status-hero__text span { overflow-wrap: anywhere; }

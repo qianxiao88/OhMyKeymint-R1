@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import MiuixBottomSheet from './StableBottomSheet.vue'
+import { afterPaint } from '../app_list/app_list'
+import { Cli, type PifDevice, type PifFingerprintState } from '../cli'
+import { i18n } from '../i18n'
+import { isDev } from '../utils/dev'
 import {
   MiuixBasicComponent,
   MiuixButton,
@@ -10,12 +15,7 @@ import {
   MiuixSwitch,
   MiuixSwitchPreference,
 } from 'miuix-vue'
-import MiuixBottomSheet from './StableBottomSheet.vue'
 import { Info, Refresh, Tune } from 'miuix-vue/icons'
-import { afterPaint } from '../app_list/app_list'
-import { Cli, type PifDevice, type PifFingerprintState } from '../cli'
-import { i18n } from '../i18n'
-import { isDev } from '../utils/dev'
 
 type LoadStatus = 'loading' | 'ready' | 'error'
 const RANDOM_SELECTION = '__random__'
@@ -54,6 +54,9 @@ const renderedDeviceCount = ref(0)
 const renderedDevices = computed(() => devices.value.slice(0, renderedDeviceCount.value))
 const stateStatus = ref<LoadStatus>('loading')
 const catalogStatus = ref<LoadStatus>('loading')
+// Where the current catalog came from. `canary` means the list was resolved live
+// from the Pixel Canary pipeline, so applying it must go through the same path.
+const catalogSource = ref<'canary' | 'mirror'>('canary')
 const stateError = ref('')
 const catalogError = ref('')
 const desiredEnabled = ref(false)
@@ -72,7 +75,7 @@ function tr(key: string, fallback: string, ...args: unknown[]): string {
   return fallback.replace(/%s/g, () => String(args[index++] ?? ''))
 }
 
-const canApply = computed(() => stateStatus.value === 'ready'
+const canApply = computed(() => stateStatus.value !== 'loading'
   && (!desiredEnabled.value
     || (catalogStatus.value === 'ready'
       && selectedProduct.value !== null
@@ -110,7 +113,7 @@ function isActive(generation: number): boolean {
 }
 
 function reconcileSelection(): void {
-  if (stateStatus.value !== 'ready' || catalogStatus.value !== 'ready') return
+  if (stateStatus.value === 'loading' || catalogStatus.value !== 'ready') return
   if (selectedProduct.value === RANDOM_SELECTION) return
   if (selectedProduct.value !== null
       && devices.value.some(device => device.product === selectedProduct.value)) return
@@ -162,11 +165,24 @@ async function loadCatalog(generation: number): Promise<void> {
   try {
     await afterPaint()
     if (!isActive(generation)) return
-    const result = preview
-      ? previewDevices
-      : await props.cli.listPifDevices()
+    if (preview) {
+      devices.value = previewDevices
+      catalogSource.value = 'mirror'
+    } else {
+      // PlayIntegrityFork resolves one live Pixel Canary build. If the upstream
+      // pages are unreachable, fall back to the mirrored catalog rather than
+      // leaving the sheet empty.
+      try {
+        devices.value = await props.cli.listCanaryDevices()
+        catalogSource.value = 'canary'
+      } catch (canaryError) {
+        if (!isActive(generation)) return
+        devices.value = await props.cli.listPifDevices()
+        catalogSource.value = 'mirror'
+        console.warn('Pixel Canary resolution failed, using the mirrored catalog:', canaryError)
+      }
+    }
     if (!isActive(generation)) return
-    devices.value = result
     catalogStatus.value = 'ready'
     reconcileSelection()
   } catch (error) {
@@ -233,9 +249,13 @@ async function apply(): Promise<void> {
       return
     }
     if (device) {
-      const state = await props.cli.applyPifFingerprint(
-        device.product, spoofBuild.value, spoofProps.value, spoofVendingBuild.value,
-      )
+      const state = catalogSource.value === 'canary'
+        ? await props.cli.applyCanaryFingerprint(
+          spoofBuild.value, spoofProps.value, spoofVendingBuild.value,
+        )
+        : await props.cli.applyPifFingerprint(
+          device.product, spoofBuild.value, spoofProps.value, spoofVendingBuild.value,
+        )
       currentState.value = state
       emit('notify', tr(
         'prompt_pif_applied',
@@ -270,7 +290,7 @@ async function apply(): Promise<void> {
   >
     <div class="pif-sheet" :aria-busy="busy">
       <p v-if="preview" class="pif-preview" role="status">
-        {{ tr('pif_preview', 'Browser preview with example data. No device configuration is changed.') }}
+        {{ tr('pif_example_catalog_preview', 'Development preview: example devices and configuration only, not real device data.') }}
       </p>
       <MiuixCard class="pif-card" press-feedback="none">
         <!-- Toggle on click, not the switch's pointerup: collapsing this sheet
@@ -280,10 +300,9 @@ async function apply(): Promise<void> {
           role="switch"
           :aria-checked="desiredEnabled"
           :aria-label="tr('pif_enable_spoofing', 'Enable PIF fingerprint spoofing')"
-          :aria-disabled="busy || stateStatus !== 'ready'"
+          :aria-disabled="busy || stateStatus === 'loading'"
           :title="tr('pif_enable_spoofing', 'Enable PIF fingerprint spoofing')"
-          :summary="tr('pif_zygisk_next_required', 'Install and enable Zygisk Next separately. OMK does not bundle it.')"
-          :disabled="busy || stateStatus !== 'ready'"
+          :disabled="busy || stateStatus === 'loading'"
           @click="desiredEnabled = !desiredEnabled"
         >
           <template #start><MiuixIcon :icon="Tune" :size="23" /></template>
@@ -291,7 +310,7 @@ async function apply(): Promise<void> {
             <MiuixSwitch
               class="pif-enable-control"
               :model-value="desiredEnabled"
-              :disabled="busy || stateStatus !== 'ready'"
+              :disabled="busy || stateStatus === 'loading'"
               tabindex="-1"
               aria-hidden="true"
             />
@@ -347,54 +366,56 @@ async function apply(): Promise<void> {
       </div>
       <div v-else-if="stateStatus === 'error'" class="pif-status pif-status--error" role="alert">
         <MiuixIcon :icon="Info" :size="24" />
-        <strong>{{ tr('pif_config_load_error', 'Failed to load the PIF configuration') }}</strong>
+        <strong>{{ tr('pif_config_recovery', 'Current configuration could not be loaded. Select a device to replace it, or switch off and apply to clear it.') }}</strong>
         <span v-if="stateError">{{ stateError }}</span>
         <MiuixButton :disabled="busy" @click="retryState">
           <MiuixIcon :icon="Refresh" :size="18" />
           {{ tr('functional_button_retry', 'Retry') }}
         </MiuixButton>
       </div>
-      <div v-else-if="!desiredEnabled" class="pif-status" role="status">
-        <span>{{ tr('pif_disabled', 'Disabled') }}</span>
-      </div>
-      <div v-else-if="catalogStatus === 'loading'" class="pif-status" role="status">
-        <MiuixProgressIndicator type="circular" :size="26" :stroke-width="2.5" />
-        <span>{{ tr('pif_loading_devices', 'Loading Pixel devices...') }}</span>
-      </div>
-      <div v-else-if="catalogStatus === 'error'" class="pif-status pif-status--error" role="alert">
-        <MiuixIcon :icon="Info" :size="24" />
-        <strong>{{ tr('pif_devices_load_error', 'Failed to load Pixel devices') }}</strong>
-        <span v-if="catalogError">{{ catalogError }}</span>
-        <MiuixButton :disabled="busy" @click="retryCatalog">
-          <MiuixIcon :icon="Refresh" :size="18" />
-          {{ tr('functional_button_retry', 'Retry') }}
-        </MiuixButton>
-      </div>
-      <template v-else>
-        <div class="catalog-heading">
-          <h3>{{ tr('pif_choose_device', 'Choose a Pixel device') }}</h3>
+      <template v-if="stateStatus !== 'loading'">
+        <div v-if="!desiredEnabled && stateStatus === 'ready'" class="pif-status" role="status">
+          <span>{{ tr('pif_disabled', 'Disabled') }}</span>
+        </div>
+        <div v-else-if="desiredEnabled && catalogStatus === 'loading'" class="pif-status" role="status">
+          <MiuixProgressIndicator type="circular" :size="26" :stroke-width="2.5" />
+          <span>{{ tr('pif_loading_devices', 'Loading Pixel devices...') }}</span>
+        </div>
+        <div v-else-if="desiredEnabled && catalogStatus === 'error'" class="pif-status pif-status--error" role="alert">
+          <MiuixIcon :icon="Info" :size="24" />
+          <strong>{{ tr('pif_devices_load_error', 'Failed to load Pixel devices') }}</strong>
+          <span v-if="catalogError">{{ catalogError }}</span>
           <MiuixButton :disabled="busy" @click="retryCatalog">
             <MiuixIcon :icon="Refresh" :size="18" />
-            {{ tr('pif_refresh_devices', 'Refresh list') }}
+            {{ tr('functional_button_retry', 'Retry') }}
           </MiuixButton>
         </div>
-        <MiuixCard class="pif-card device-list" press-feedback="none">
-          <MiuixRadioButtonPreference
-            :model-value="selectedProduct === RANDOM_SELECTION"
-            :title="tr('pif_random_device', 'Random')"
-            :disabled="busy"
-            @select="selectedProduct = RANDOM_SELECTION"
-          />
-          <MiuixRadioButtonPreference
-            v-for="device in renderedDevices"
-            :key="device.product"
-            :model-value="selectedProduct === device.product"
-            :title="device.model"
-            :summary="device.product"
-            :disabled="busy"
-            @select="selectedProduct = device.product"
-          />
-        </MiuixCard>
+        <template v-else-if="desiredEnabled">
+          <div class="catalog-heading">
+            <h3>{{ tr('pif_choose_device', 'Choose a Pixel device') }}</h3>
+            <MiuixButton :disabled="busy" @click="retryCatalog">
+              <MiuixIcon :icon="Refresh" :size="18" />
+              {{ tr('pif_refresh_devices', 'Refresh list') }}
+            </MiuixButton>
+          </div>
+          <MiuixCard class="pif-card device-list" press-feedback="none">
+            <MiuixRadioButtonPreference
+              :model-value="selectedProduct === RANDOM_SELECTION"
+              :title="tr('pif_random_device', 'Random')"
+              :disabled="busy"
+              @select="selectedProduct = RANDOM_SELECTION"
+            />
+            <MiuixRadioButtonPreference
+              v-for="device in renderedDevices"
+              :key="device.product"
+              :model-value="selectedProduct === device.product"
+              :title="device.model"
+              :summary="device.product"
+              :disabled="busy"
+              @select="selectedProduct = device.product"
+            />
+          </MiuixCard>
+        </template>
       </template>
 
       <div class="sheet-actions">

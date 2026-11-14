@@ -10,7 +10,7 @@ import {
   MiuixSmallTitle,
   MiuixTopAppBar,
 } from 'miuix-vue'
-import { AddCircle, BankCards, Close, Edit, Lock, Replace, Reset, Update } from 'miuix-vue/icons'
+import { AddCircle, BankCards, Close, Edit, Info, Lock, Photos, Replace, Reset, Update } from 'miuix-vue/icons'
 import MiuixBottomSheet from './StableBottomSheet.vue'
 import { i18n } from '../i18n'
 import { isSecurityPatchDate } from '../security_patch'
@@ -26,6 +26,9 @@ export type ToolEvent =
   | 'repairRkp'
   | 'issueRkp'
   | 'openSoterLocal'
+  | 'cloudUpdate'
+  | 'feedback'
+  | 'wallpaper'
 
 type BusyPatch = 'sync' | 'restore' | null
 type SheetId = 'rkp' | 'patch'
@@ -52,6 +55,7 @@ const props = defineProps<{
   maintenanceBusy: 'gms' | 'rkp' | null
   rkpIssuanceBusy: boolean
   securityPatch: string | null
+  cloudBusy?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -65,6 +69,9 @@ const emit = defineEmits<{
   repairRkp: []
   issueRkp: []
   openSoterLocal: []
+  cloudUpdate: []
+  feedback: []
+  wallpaper: []
   'overlay-open': []
   'overlay-close': []
 }>()
@@ -80,6 +87,9 @@ function runTool(event: ToolEvent): void {
     case 'repairRkp': emit('repairRkp'); break
     case 'issueRkp': emit('issueRkp'); break
     case 'openSoterLocal': emit('openSoterLocal'); break
+    case 'cloudUpdate': emit('cloudUpdate'); break
+    case 'feedback': emit('feedback'); break
+    case 'wallpaper': emit('wallpaper'); break
   }
 }
 
@@ -147,6 +157,28 @@ const sheets: Record<SheetId, { title: string, actions: ToolAction[] }> = {
   },
 }
 
+const cloudRow: ToolRow = {
+  key: 'cloud',
+  event: 'cloudUpdate',
+  icon: Update,
+  title: tr('tools_cloud_keybox', '从云端获取keybox'),
+  summary: tr('tools_cloud_keybox_desc', '从浅笑云端更新keybox'),
+}
+const feedbackRow: ToolRow = {
+  key: 'feedback',
+  event: 'feedback',
+  icon: Info,
+  title: tr('tools_feedback_group', '点击加入反馈群'),
+  summary: tr('tools_feedback_group_desc', '点击加入反馈群，不懂的先看公告再进行有效反馈。'),
+}
+const wallpaperRow: ToolRow = {
+  key: 'wallpaper',
+  event: 'wallpaper',
+  icon: Photos,
+  title: tr('tools_wallpaper', '背景壁纸'),
+  summary: '',
+}
+
 const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => [
   {
     title: tr('tools_app_management', 'App management'),
@@ -161,6 +193,7 @@ const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => [
   {
     title: tr('tools_keybox_attestation', 'Keybox & attestation'),
     rows: [
+      cloudRow,
       {
         key: 'keybox',
         event: 'installKeybox',
@@ -209,8 +242,10 @@ const groups = computed<{ title: string, rows: ToolRow[] }[]>(() => [
         summary: props.securityPatch
           ?? tr('tools_security_patch_desc', 'Sync or restore the reported security patch date.'),
       },
+      feedbackRow,
     ],
   },
+  { title: tr('tools_wallpaper_group', '背景壁纸'), rows: [wallpaperRow] },
 ])
 
 function isBusy(event: ToolEvent): boolean {
