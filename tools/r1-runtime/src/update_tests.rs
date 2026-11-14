@@ -2,6 +2,19 @@ use super::*;
 use crate::tests::{build, TestRoot};
 use std::collections::VecDeque;
 use std::net::TcpListener;
+// The production helpers now take the configurable polling interval. These
+// scenarios are about update transitions, not about the period, so shim the
+// three- and four-argument forms instead of repeating a constant everywhere.
+const TEST_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
+fn cloud_check(
+    paths: &Paths,
+    mode: CheckMode,
+    backend: &mut impl UpdateBackend,
+) -> Result<Option<bool>> {
+    super::cloud_check(paths, mode, backend, TEST_INTERVAL)
+}
+
 
 // Deliberately not a real XML keybox or certificate. Only the native importer
 // owns XML validation; these fixtures exercise the updater and its boundaries.
@@ -115,13 +128,13 @@ fn startup_checks_after_ready_but_restarts_preserve_outage_backoff() {
     let root = TestRoot::new();
     let paths = root.paths();
     let mut cloud = cache(&paths, FIXTURE);
-    cloud.finish(now(), true);
+    cloud.finish(now(), true, TEST_INTERVAL);
     cloud.save(&paths).unwrap();
     let mut backend = MockBackend::new(Some(FIXTURE), vec![Ok(response(304, b""))]);
     assert_eq!(cloud_check(&paths, CheckMode::Startup, &mut backend).unwrap(), Some(true));
     assert_eq!(backend.requests.len(), 1);
     cloud = CloudObservation::load(&paths);
-    cloud.finish(now(), false);
+    cloud.finish(now(), false, TEST_INTERVAL);
     cloud.save(&paths).unwrap();
     assert_eq!(cloud_check(&paths, CheckMode::Startup, &mut backend).unwrap(), None);
     assert_eq!(backend.requests.len(), 1);
@@ -263,16 +276,16 @@ fn offline_retry_is_persisted_exponential_bounded_and_never_every_minute() {
     assert!(status(Ok(()), &cloud).ok);
     let mut schedule = CloudObservation::default();
     for (index, seconds) in [900, 1800, 3600, 7200, 14400, 21600, 21600].into_iter().enumerate() {
-        schedule.finish(1000, false);
+        schedule.finish(1000, false, TEST_INTERVAL);
         assert_eq!(schedule.failures, index as u32 + 1);
         assert_eq!(schedule.next_check_at - schedule.checked_at, seconds);
-        assert!(!schedule.due(1000 + 60));
-        assert!(schedule.due(1000 + seconds));
+        assert!(!schedule.due(1000 + 60, TEST_INTERVAL));
+        assert!(schedule.due(1000 + seconds, TEST_INTERVAL));
     }
-    schedule.finish(2000, true);
+    schedule.finish(2000, true, TEST_INTERVAL);
     assert_eq!(schedule.failures, 0);
     assert_eq!(schedule.next_check_at, 2000 + CLOUD_INTERVAL.as_secs());
-    assert!(schedule.due(1999)); // time moved backwards
+    assert!(schedule.due(1999, TEST_INTERVAL)); // time moved backwards
 }
 
 #[test]

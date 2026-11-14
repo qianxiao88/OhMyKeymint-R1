@@ -37,6 +37,12 @@ fn build() -> BuildInfo {
         .unwrap()
 }
 
+/// Test-local shim: the production `status` now takes the polling interval, but
+/// these assertions are about the state transitions and should not repeat it.
+fn status(local: Result<()>, cloud: &CloudObservation) -> Status {
+    super::status(local, cloud, CLOUD_INTERVAL)
+}
+
 fn observation(connected: bool) -> CloudObservation {
     CloudObservation {
         checked_at: now(),
@@ -311,14 +317,14 @@ fn cloud_connection_requires_current_boot_and_bounded_observation_age() {
         connected: true,
         ..CloudObservation::default()
     };
-    assert!(cloud.fresh_at(1000, Some("boot-a")));
-    assert!(cloud.fresh_at(1000 + CLOUD_INTERVAL.as_secs(), Some("boot-a")));
-    assert!(!cloud.fresh_at(1001 + CLOUD_INTERVAL.as_secs(), Some("boot-a")));
-    assert!(!cloud.fresh_at(999, Some("boot-a")));
-    assert!(!cloud.fresh_at(1000, Some("boot-b")));
-    assert!(!cloud.fresh_at(1000, None));
+    assert!(cloud.fresh_at(1000, Some("boot-a"), CLOUD_INTERVAL));
+    assert!(cloud.fresh_at(1000 + CLOUD_INTERVAL.as_secs(), Some("boot-a"), CLOUD_INTERVAL));
+    assert!(!cloud.fresh_at(1001 + CLOUD_INTERVAL.as_secs(), Some("boot-a"), CLOUD_INTERVAL));
+    assert!(!cloud.fresh_at(999, Some("boot-a"), CLOUD_INTERVAL));
+    assert!(!cloud.fresh_at(1000, Some("boot-b"), CLOUD_INTERVAL));
+    assert!(!cloud.fresh_at(1000, None, CLOUD_INTERVAL));
     let old = CloudObservation { boot_id: None, ..cloud };
-    assert!(!old.fresh_at(1000, Some("boot-a")));
+    assert!(!old.fresh_at(1000, Some("boot-a"), CLOUD_INTERVAL));
     let checked = status(Ok(()), &old);
     assert!(!checked.cloud_connected);
     assert_eq!(checked.phase, "checking");

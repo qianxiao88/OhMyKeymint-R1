@@ -23,6 +23,17 @@ const KEYBOX_URL: &str = "https://omk.5ijxa.com/api/omk/index.php?action=keybox"
 const KEYBOX_PATH: &str = "/data/misc/keystore/omk/keybox.xml";
 const STATS_LIMIT: usize = 8 * 1024;
 const KEYBOX_LIMIT: usize = 64 * 1024;
+/// Cloud polling interval when the configuration does not name one.
+///
+/// Ten minutes keeps a revoked keybox from lingering: the cloud re-issues on its
+/// own schedule, and the client picks the replacement up on the next poll.
+const DEFAULT_CLOUD_INTERVAL_MINUTES: u64 = 10;
+/// Upper bound for the configurable interval (24 h), so a typo cannot park the
+/// helper for a week.
+const MAX_CLOUD_INTERVAL_MINUTES: u64 = 24 * 60;
+/// Reference interval the freshness assertions are written against. Production
+/// code reads `cloud_interval()` instead, so this only exists for the tests.
+#[cfg(test)]
 const CLOUD_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const CLOUD_RETRY_MIN: Duration = Duration::from_secs(15 * 60);
 const LOCAL_INTERVAL: Duration = Duration::from_secs(60);
@@ -408,41 +419,54 @@ fn current_boot_id() -> Option<String> {
     .then(|| value.to_ascii_lowercase())
 }
 
-fn retry_delay(failures: u32) -> Duration {
+/// Read `cloud_interval_minutes` from the module's `r1-cloud.json`.
+///
+/// The WebUI writes this file, so the user can change the polling period without
+/// a new package. Anything unreadable, malformed or out of range falls back to
+/// the default, because a bad number must never stop the poller.
+fn cloud_interval(paths: &Paths) -> Duration {
+    let minutes = read_file(&paths.module.join("r1-cloud.json"), STATS_LIMIT)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|value| value.get("cloud_interval_minutes").and_then(Value::as_u64))
+        .filter(|minutes| *minutes >= 1 && *minutes <= MAX_CLOUD_INTERVAL_MINUTES)
+        .unwrap_or(DEFAULT_CLOUD_INTERVAL_MINUTES);
+    Duration::from_secs(minutes * 60)
+}
+
+fn retry_delay(failures: u32, interval: Duration) -> Duration {
     let multiplier = 1u64 << failures.saturating_sub(1).min(5);
-    Duration::from_secs((CLOUD_RETRY_MIN.as_secs() * multiplier).min(CLOUD_INTERVAL.as_secs()))
+    Duration::from_secs((CLOUD_RETRY_MIN.as_secs() * multiplier).min(interval.as_secs()))
 }
 
 impl CloudObservation {
-    fn fresh(&self) -> bool {
-        self.fresh_at(now(), current_boot_id().as_deref())
+    fn fresh(&self, interval: Duration) -> bool {
+        self.fresh_at(now(), current_boot_id().as_deref(), interval)
     }
 
-    fn fresh_at(&self, timestamp: u64, boot_id: Option<&str>) -> bool {
+    fn fresh_at(&self, timestamp: u64, boot_id: Option<&str>, interval: Duration) -> bool {
         self.checked_at > 0
             && self.boot_id.as_deref().zip(boot_id).is_some_and(|(saved, current)| saved == current)
-            && timestamp
-                .checked_sub(self.checked_at)
-                .is_some_and(|age| age <= CLOUD_INTERVAL.as_secs())
+            && timestamp.checked_sub(self.checked_at).is_some_and(|age| age <= interval.as_secs())
     }
 
-    fn due(&self, timestamp: u64) -> bool {
+    fn due(&self, timestamp: u64, interval: Duration) -> bool {
         self.checked_at == 0
             || timestamp < self.checked_at
             || timestamp >= self.next_check_at
-            || self.next_check_at.saturating_sub(timestamp) > CLOUD_INTERVAL.as_secs()
+            || self.next_check_at.saturating_sub(timestamp) > interval.as_secs()
     }
 
-    fn should_check(&self, mode: CheckMode, timestamp: u64) -> bool {
+    fn should_check(&self, mode: CheckMode, timestamp: u64, interval: Duration) -> bool {
         mode == CheckMode::Manual
             || (mode == CheckMode::Startup && self.failures == 0)
-            || self.due(timestamp)
+            || self.due(timestamp, interval)
     }
 
-    fn finish(&mut self, timestamp: u64, success: bool) {
+    fn finish(&mut self, timestamp: u64, success: bool, interval: Duration) {
         self.checked_at = timestamp;
         self.failures = if success { 0 } else { self.failures.saturating_add(1) };
-        let delay = if success { CLOUD_INTERVAL } else { retry_delay(self.failures) };
+        let delay = if success { interval } else { retry_delay(self.failures, interval) };
         self.next_check_at = timestamp.saturating_add(delay.as_secs());
     }
 
@@ -480,10 +504,10 @@ pub struct Status {
     pub next_cloud_check_at: u64,
 }
 
-fn status(local: Result<()>, cloud: &CloudObservation) -> Status {
+fn status(local: Result<()>, cloud: &CloudObservation, interval: Duration) -> Status {
     let ok = local.is_ok();
     let reason = local.err().map(|reason| single_line(&reason)).unwrap_or_default();
-    let fresh = cloud.fresh();
+    let fresh = cloud.fresh(interval);
     let cloud_connected = cloud.connected && fresh;
     let cloud_phase = if !fresh {
         "pending"
@@ -926,6 +950,7 @@ fn cloud_check(
     paths: &Paths,
     mode: CheckMode,
     backend: &mut impl UpdateBackend,
+    interval: Duration,
 ) -> Result<Option<bool>> {
     let _lock = match Lock::acquire(&paths.data.join("update.lock"), Duration::ZERO) {
         Ok(lock) => lock,
@@ -935,7 +960,7 @@ fn cloud_check(
         Err(reason) => return Err(reason),
     };
     let mut cloud = CloudObservation::load(paths);
-    if !cloud.should_check(mode, now()) {
+    if !cloud.should_check(mode, now(), interval) {
         return Ok(None);
     }
     let stats = backend.stats();
@@ -976,19 +1001,21 @@ fn cloud_check(
     if outcome.is_ok() {
         cloud.keybox_checked_at = timestamp;
     }
-    cloud.finish(timestamp, cloud.connected && outcome.is_ok());
+    cloud.finish(timestamp, cloud.connected && outcome.is_ok(), interval);
     // A state write failure returns an error, never a successful update receipt.
     cloud.save(paths)?;
     outcome.map(Some)
 }
 
 fn refresh_description(paths: &Paths, build: &BuildInfo) -> Result<()> {
-    let checked = status(local_status(paths), &CloudObservation::load(paths));
+    let interval = cloud_interval(paths);
+    let checked = status(local_status(paths), &CloudObservation::load(paths), interval);
     update_description(paths, build, DisplayState::Checked(&checked))
 }
 
 fn cloud_update(paths: &Paths, build: &BuildInfo) -> Result<bool> {
-    let outcome = cloud_check(paths, CheckMode::Manual, &mut NativeBackend(paths));
+    let interval = cloud_interval(paths);
+    let outcome = cloud_check(paths, CheckMode::Manual, &mut NativeBackend(paths), interval);
     if let Err(reason) = refresh_description(paths, build) {
         eprintln!("r1-helper: status refresh failed: {reason}");
     }
@@ -997,6 +1024,9 @@ fn cloud_update(paths: &Paths, build: &BuildInfo) -> Result<bool> {
 
 fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
     let _monitor = Lock::acquire(&paths.data.join("monitor.lock"), Duration::ZERO)?;
+    // Read once per process: the interval only changes when the user edits the
+    // setting, and a fresh helper run picks that up.
+    let interval = cloud_interval(paths);
     update_description(paths, build, DisplayState::Waiting("waiting for Android boot completion"))?;
     let boot_started = Instant::now();
     loop {
@@ -1013,7 +1043,7 @@ fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
                 if boot_started.elapsed() < STARTUP_GRACE {
                     update_description(paths, build, DisplayState::Waiting(&reason))?;
                 } else {
-                    let checked = status(Err(reason), &CloudObservation::load(paths));
+                    let checked = status(Err(reason), &CloudObservation::load(paths), interval);
                     update_description(paths, build, DisplayState::Checked(&checked))?;
                 }
                 thread::sleep(Duration::from_secs(5));
@@ -1028,7 +1058,7 @@ fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
         let cycle = Instant::now();
         let mut local = local_status(paths);
         if local.is_ok() && cycle >= next_cloud {
-            let checked = cloud_check(paths, mode, &mut NativeBackend(paths));
+            let checked = cloud_check(paths, mode, &mut NativeBackend(paths), interval);
             if !matches!(checked, Ok(None)) {
                 mode = CheckMode::Scheduled;
             }
@@ -1036,10 +1066,10 @@ fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
                 eprintln!("r1-helper: cloud update deferred: {}", single_line(reason));
             }
             let cloud = CloudObservation::load(paths);
-            let delay = if checked.is_err() && cloud.due(now()) {
+            let delay = if checked.is_err() && cloud.due(now(), interval) {
                 // Also back off if the retry schedule could not be persisted.
                 CLOUD_RETRY_MIN
-            } else if cloud.due(now()) {
+            } else if cloud.due(now(), interval) {
                 // A concurrent manual update holds the lock; no network ran here.
                 LOCAL_INTERVAL
             } else {
@@ -1058,7 +1088,7 @@ fn monitor(paths: &Paths, build: &BuildInfo) -> Result<()> {
                 ),
             )?;
         } else {
-            let checked = status(local, &CloudObservation::load(paths));
+            let checked = status(local, &CloudObservation::load(paths), interval);
             update_description(paths, build, DisplayState::Checked(&checked))?;
         }
         let interval = if health_checking { Duration::from_secs(5) } else { LOCAL_INTERVAL };
@@ -1073,7 +1103,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
     }
     let paths = Paths::default();
     if command == "status" {
-        let checked = status(local_status(&paths), &CloudObservation::load(&paths));
+        let interval = cloud_interval(&paths);
+        let checked = status(local_status(&paths), &CloudObservation::load(&paths), interval);
         println!("{}", serde_json::to_string(&checked).map_err(|_| "cannot encode status")?);
         return Ok(());
     }
